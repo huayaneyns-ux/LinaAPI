@@ -22,7 +22,7 @@
 //app.MapControllers();
 
 //app.Run();
-
+using ApiLinaAgbd.Services;
 using ApiLinaAgbd.Data;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -31,6 +31,7 @@ builder.Services.AddControllers();
 builder.Services.AddSingleton<Conexion>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddScoped<CloudinaryService>();
 
 // Configuración de CORS
 builder.Services.AddCors(options =>
