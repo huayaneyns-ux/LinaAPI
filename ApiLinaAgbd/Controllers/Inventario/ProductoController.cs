@@ -47,6 +47,7 @@ namespace ApiLinaAgbd.Controllers.Inventario
 						PrecioVenta = Convert.ToDecimal(dr["precio_venta"]),
 						FactorConversion = dr["factor_conversion"] == DBNull.Value ? null : Convert.ToDecimal(dr["factor_conversion"]),
 						StockMinimo = Convert.ToInt32(dr["stock_minimo"]),
+						Stock = Convert.ToDecimal(dr["stock"]),
 						RutaImagen = dr["ruta_imagen"] == DBNull.Value ? null : dr["ruta_imagen"].ToString(),
 						PublicIdImagen = dr["public_id_imagen"] == DBNull.Value? null: dr["public_id_imagen"].ToString(),
 						Estado = Convert.ToBoolean(dr["estado"]),

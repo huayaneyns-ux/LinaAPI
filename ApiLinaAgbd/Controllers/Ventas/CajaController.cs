@@ -93,57 +93,95 @@ namespace ApiLinaAgbd.Controllers.Ventas
 
 
 
-						//====================================
-						// 2. INSERTAR DETALLE
-						//====================================
+				//====================================
+				// 2. INSERTAR DETALLE
+				//====================================
 
-						foreach (var item in venta.Detalle)
+				foreach (var item in venta.Detalle)
+				{
+					SqlCommand cmdDetalle = new SqlCommand(
+						"USP_VTA_INS_DETALLE",
+						con,
+						transaction);
+
+					cmdDetalle.CommandType = CommandType.StoredProcedure;
+
+					cmdDetalle.Parameters.AddWithValue("@IdVenta", idVenta);
+					cmdDetalle.Parameters.AddWithValue("@IdProducto", item.IdProducto);
+					cmdDetalle.Parameters.AddWithValue("@Cantidad", item.Cantidad);
+					cmdDetalle.Parameters.AddWithValue("@PrecioUnitario", item.PrecioUnitario);
+
+
+					List<(int IdDetalleVenta, int IdLote, int Cantidad)> lotes = new();
+
+
+					using (SqlDataReader dr = cmdDetalle.ExecuteReader())
+					{
+						while (dr.Read())
 						{
-
-							SqlCommand cmdDetalle =
-								new SqlCommand(
-									"USP_VTA_INS_DETALLE",
-									con,
-									transaction);
-
-
-							cmdDetalle.CommandType =
-								CommandType.StoredProcedure;
-
-
-							cmdDetalle.Parameters.AddWithValue(
-								"@IdVenta",
-								idVenta);
-
-
-							cmdDetalle.Parameters.AddWithValue(
-								"@IdProducto",
-								item.IdProducto);
-
-
-							cmdDetalle.Parameters.AddWithValue(
-								"@Cantidad",
-								item.Cantidad);
-
-
-							cmdDetalle.Parameters.AddWithValue(
-								"@PrecioUnitario",
-								item.PrecioUnitario);
-
-
-
-							cmdDetalle.ExecuteNonQuery();
-
+							lotes.Add((
+								Convert.ToInt32(dr["IdDetalleVenta"]),
+								Convert.ToInt32(dr["IdLote"]),
+								Convert.ToInt32(dr["Cantidad"])
+							));
 						}
+					}
 
+
+
+					foreach (var lote in lotes)
+					{
+
+						//====================================
+						// GUARDAR DETALLE VENTA LOTE
+						//====================================
+
+						SqlCommand cmdDetalleLote = new SqlCommand(
+							"USP_VTA_INS_DETALLE_LOTE",
+							con,
+							transaction);
+
+						cmdDetalleLote.CommandType = CommandType.StoredProcedure;
+
+						cmdDetalleLote.Parameters.AddWithValue("@IdDetalleVenta", lote.IdDetalleVenta);
+						cmdDetalleLote.Parameters.AddWithValue("@IdLote", lote.IdLote);
+						cmdDetalleLote.Parameters.AddWithValue("@Cantidad", lote.Cantidad);
+
+						cmdDetalleLote.ExecuteNonQuery();
 
 
 
 						//====================================
-						// 3. INSERTAR PAGOS
+						// REGISTRAR MOVIMIENTO INVENTARIO
 						//====================================
 
-						foreach (var pago in venta.Pagos)
+						SqlCommand cmdMovimiento = new SqlCommand(
+							"USP_MOV_INS_MOVIMIENTO",
+							con,
+							transaction);
+
+						cmdMovimiento.CommandType = CommandType.StoredProcedure;
+
+						cmdMovimiento.Parameters.AddWithValue("@IdUsuario", venta.IdUsuario);
+						cmdMovimiento.Parameters.AddWithValue("@IdLote", lote.IdLote);
+						cmdMovimiento.Parameters.AddWithValue("@IdProducto", item.IdProducto);
+						cmdMovimiento.Parameters.AddWithValue("@Tipo", 2); // Venta
+						cmdMovimiento.Parameters.AddWithValue("@Cantidad", lote.Cantidad);
+						cmdMovimiento.Parameters.AddWithValue("@Motivo", $"Venta N° {idVenta}");
+
+						cmdMovimiento.ExecuteNonQuery();
+
+					}
+				}
+
+
+
+
+				//====================================
+				// 3. INSERTAR PAGOS
+				//====================================
+
+				foreach (var pago in venta.Pagos)
 						{
 
 							SqlCommand cmdPago =

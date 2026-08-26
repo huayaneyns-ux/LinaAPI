@@ -15,5 +15,10 @@ namespace ApiLinaAgbd.Data
 		{
 			return new SqlConnection(cadena);
 		}
+
+		internal SqlConnection GetConnection()
+		{
+			throw new NotImplementedException();
+		}
 	}
 }
