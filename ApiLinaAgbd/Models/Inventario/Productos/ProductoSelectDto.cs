@@ -16,6 +16,8 @@
 		public string? PublicIdImagen { get; set; }
 		public bool Estado { get; set; }
 
+		public decimal Stock { get; set; }
+
 		// Categoría
 		public int IdCategoria { get; set; }
 		public string Categoria { get; set; }

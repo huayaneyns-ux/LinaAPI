@@ -22,8 +22,11 @@
 //app.MapControllers();
 
 //app.Run();
-using ApiLinaAgbd.Services;
 using ApiLinaAgbd.Data;
+using ApiLinaAgbd.Models.Facturacion;
+using ApiLinaAgbd.Services;
+using ApiLinaAgbd.Services.Facturacion;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -32,6 +35,27 @@ builder.Services.AddSingleton<Conexion>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddScoped<CloudinaryService>();
+
+builder.Services.Configure<FacturacionSettings>(
+	builder.Configuration.GetSection(FacturacionSettings.SectionName));
+
+builder.Services.AddHttpClient<FacturacionSunatService>((sp, client) =>
+{
+	var settings = sp.GetRequiredService<IOptions<FacturacionSettings>>().Value;
+	var baseUrl = string.IsNullOrWhiteSpace(settings.BaseUrl)
+		? "https://back.apisunat.com/"
+		: settings.BaseUrl.TrimEnd('/') + "/";
+
+	client.BaseAddress = new Uri(baseUrl);
+	client.Timeout = TimeSpan.FromSeconds(60);
+});
+
+builder.Services.AddScoped<BoletaUblBuilder>();
+builder.Services.AddScoped<BoletaService>();
+builder.Services.AddScoped<FacturaUblBuilder>();
+builder.Services.AddScoped<FacturaService>();
+builder.Services.AddScoped<NotaDebitoUblBuilder>();
+builder.Services.AddScoped<NotaDebitoService>();
 
 // Configuración de CORS
 builder.Services.AddCors(options =>

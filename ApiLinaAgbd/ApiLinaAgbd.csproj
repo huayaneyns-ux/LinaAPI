@@ -16,9 +16,7 @@
 
   <ItemGroup>
     <Folder Include="Controllers\Dashboard\" />
-    <Folder Include="Controllers\Seguridad\" />
     <Folder Include="Models\Dashboard\" />
-    <Folder Include="Models\Seguridad\" />
   </ItemGroup>
 
 </Project>
