@@ -33,6 +33,9 @@ namespace ApiLinaAgbd.Services.Facturacion
 				CustomizationId = UblNode.Value("2.0"),
 				Id = UblNode.Value($"{request.Serie}-{request.Correlativo}"),
 				IssueDate = UblNode.Value(request.FechaEmision),
+				DueDate = string.IsNullOrWhiteSpace(request.FechaVencimiento)
+					? null
+					: UblNode.Value(request.FechaVencimiento),
 				IssueTime = UblNode.Value(horaEmision),
 				InvoiceTypeCode = UblNode.Attr(TipoDocumentoFactura, "listID", CodigoOperacionVentaInterna),
 				Note =
@@ -49,6 +52,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 					TaxInclusiveAmount = UblNode.Amount(request.Totales.Total, moneda),
 					PayableAmount = UblNode.Amount(request.Totales.Total, moneda)
 				},
+				PaymentTerms = BuildPaymentTerms(request.Pago, moneda),
 				InvoiceLine = BuildLineas(request.Items, moneda)
 			};
 		}
@@ -172,6 +176,45 @@ namespace ApiLinaAgbd.Services.Facturacion
 			}
 
 			return lineas;
+		}
+
+		private static List<UblPaymentTerms>? BuildPaymentTerms(FacturaPagoDto? pago, string moneda)
+		{
+			if (pago is null)
+			{
+				return null;
+			}
+
+			var formaPago = string.Equals(pago.FormaPago, "CREDITO", StringComparison.OrdinalIgnoreCase)
+				? "Credito"
+				: "Contado";
+
+			var paymentTerms = new List<UblPaymentTerms>
+			{
+				new()
+				{
+					Id = UblNode.Value("FormaPago"),
+					PaymentMeansId = UblNode.Value(formaPago)
+				}
+			};
+
+			if (!string.Equals(formaPago, "Credito", StringComparison.OrdinalIgnoreCase))
+			{
+				return paymentTerms;
+			}
+
+			for (var i = 0; i < pago.Cuotas.Count; i++)
+			{
+				var cuota = pago.Cuotas[i];
+				paymentTerms.Add(new UblPaymentTerms
+				{
+					Id = UblNode.Value($"Cuota{(i + 1):000}"),
+					Amount = UblNode.Amount(cuota.Monto, moneda),
+					PaymentDueDate = UblNode.Value(cuota.FechaVencimiento)
+				});
+			}
+
+			return paymentTerms;
 		}
 	}
 }

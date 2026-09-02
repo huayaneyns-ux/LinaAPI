@@ -1,0 +1,1439 @@
+using System.Data;
+using System.Data.SqlClient;
+using System.Globalization;
+using ApiLinaAgbd.Data;
+using ApiLinaAgbd.Models.Facturacion;
+using ApiLinaAgbd.Models.Facturacion.Boleta;
+using ApiLinaAgbd.Models.Facturacion.ComprobantesVenta;
+using ApiLinaAgbd.Models.Facturacion.Factura;
+
+namespace ApiLinaAgbd.Services.Facturacion
+{
+	public class ComprobanteVentasService
+	{
+		private const string SerieBoleta = "B001";
+		private const string SerieFactura = "F001";
+		private const string TipoBoletaSunat = "03";
+		private const string TipoFacturaSunat = "01";
+
+		private readonly Conexion _conexion;
+		private readonly BoletaUblBuilder _boletaBuilder;
+		private readonly FacturaUblBuilder _facturaBuilder;
+		private readonly FacturacionSunatService _facturacionSunatService;
+		private readonly FacturacionSettings _settings;
+
+		public ComprobanteVentasService(
+			Conexion conexion,
+			BoletaUblBuilder boletaBuilder,
+			FacturaUblBuilder facturaBuilder,
+			FacturacionSunatService facturacionSunatService,
+			Microsoft.Extensions.Options.IOptions<FacturacionSettings> options)
+		{
+			_conexion = conexion;
+			_boletaBuilder = boletaBuilder;
+			_facturaBuilder = facturaBuilder;
+			_facturacionSunatService = facturacionSunatService;
+			_settings = options.Value;
+		}
+
+		public async Task<List<VentaComprobanteDisponibleDto>> ListarVentasDisponiblesAsync()
+		{
+			var ventas = new Dictionary<int, VentaComprobanteDisponibleDto>();
+
+			using var con = _conexion.ObtenerConexion();
+			await con.OpenAsync();
+
+			const string sql = """
+				SELECT
+					v.id AS VentaId,
+					v.fecha,
+					v.igv,
+					u.nombre_apellido AS ClienteNombre,
+					COALESCE(NULLIF(d.tipo_documento, ''), CASE
+						WHEN NULLIF(u.ruc, '') IS NOT NULL THEN 'ruc'
+						WHEN NULLIF(u.dni, '') IS NOT NULL THEN 'dni'
+						ELSE ''
+					END) AS TipoDocumentoCliente,
+					COALESCE(NULLIF(d.numero, ''), NULLIF(u.ruc, ''), NULLIF(u.dni, ''), '') AS DocumentoCliente,
+					COALESCE(NULLIF(d.nombre, ''), NULLIF(u.nombre_apellido, ''), '') AS NombreDocumentoCliente,
+					COALESCE(NULLIF(dir.nombre_direccion, ''), '') AS DireccionCliente,
+					COALESCE(NULLIF(u.correo, ''), '') AS CorreoCliente,
+					p.id AS ProductoId,
+					COALESCE(NULLIF(p.codigo, ''), '') AS CodigoProducto,
+					COALESCE(NULLIF(p.descripcion, ''), NULLIF(p.nombre, ''), '') AS DescripcionProducto,
+					CAST(dv.cantidad AS decimal(18, 2)) AS Cantidad,
+					CAST(dv.preciounitario AS decimal(18, 2)) AS PrecioUnitario,
+					COALESCE(NULLIF(um.abreviatura, ''), 'NIU') AS UnidadMedida
+				FROM dbo.venta v
+				INNER JOIN dbo.usuario u ON u.id = v.id_cliente
+				LEFT JOIN dbo.documento d ON d.id = u.id_documento
+				LEFT JOIN dbo.direccion dir ON dir.id_usuario = u.id
+				INNER JOIN dbo.detalleventa dv ON dv.id_venta = v.id
+				INNER JOIN dbo.producto p ON p.id = dv.id_producto
+				LEFT JOIN dbo.unidadmedida um ON um.id = p.id_unidad_medida
+				WHERE NOT EXISTS (
+					SELECT 1
+					FROM dbo.Voucher vx
+					WHERE vx.VentaId = v.id
+					  AND vx.SunatTypeCode IN ('01', '03')
+				) AND dir.seleccionado = 1
+				ORDER BY v.id DESC, dv.id ASC;
+				""";
+
+			using var cmd = new SqlCommand(sql, con) { CommandType = CommandType.Text };
+			using var dr = await cmd.ExecuteReaderAsync();
+
+			while (await dr.ReadAsync())
+			{
+				var ventaId = dr.GetInt32(dr.GetOrdinal("VentaId"));
+				if (!ventas.TryGetValue(ventaId, out var venta))
+				{
+					var fecha = dr.GetDateTime(dr.GetOrdinal("fecha"));
+					var tipoDocumento = MapearTipoDocumentoUi(dr["TipoDocumentoCliente"]?.ToString());
+					var documento = dr["DocumentoCliente"]?.ToString() ?? string.Empty;
+					var nombreDocumento = dr["NombreDocumentoCliente"]?.ToString() ?? string.Empty;
+					var nombreCliente = dr["ClienteNombre"]?.ToString() ?? string.Empty;
+
+					venta = new VentaComprobanteDisponibleDto
+					{
+						Id = ventaId.ToString(),
+						Codigo = $"VTA-{ventaId:D6}",
+						Fecha = fecha.ToString("yyyy-MM-dd"),
+						Cliente = new ComprobanteVentaClienteDto
+						{
+							TipoDocumento = string.IsNullOrWhiteSpace(tipoDocumento) ? "DNI" : tipoDocumento,
+							Documento = documento,
+							Nombre = string.IsNullOrWhiteSpace(nombreDocumento) ? nombreCliente : nombreDocumento,
+							Direccion = dr["DireccionCliente"]?.ToString() ?? string.Empty,
+							Correo = dr["CorreoCliente"]?.ToString() ?? string.Empty
+						}
+					};
+
+					ventas.Add(ventaId, venta);
+				}
+
+				var cantidad = Convert.ToDecimal(dr["Cantidad"]);
+				var precio = Convert.ToDecimal(dr["PrecioUnitario"]);
+				var porcentajeIgv = ObtenerIgvVenta(dr);
+				var subtotal = Redondear(cantidad * precio);
+				var igvItem = Redondear(subtotal * porcentajeIgv / 100m);
+
+				venta.Detalle.Add(new VentaComprobanteDetalleDto
+				{
+					ProductoId = dr.GetInt32(dr.GetOrdinal("ProductoId")),
+					Codigo = dr["CodigoProducto"]?.ToString() ?? string.Empty,
+					ProductoServicio = dr["DescripcionProducto"]?.ToString() ?? string.Empty,
+					Cantidad = cantidad,
+					Precio = precio,
+					Igv = igvItem,
+					Importe = Redondear(subtotal + igvItem),
+					UnidadMedida = dr["UnidadMedida"]?.ToString() ?? "NIU"
+				});
+			}
+
+			foreach (var venta in ventas.Values)
+			{
+				venta.Subtotal = Redondear(venta.Detalle.Sum(x => x.Precio * x.Cantidad));
+				venta.Igv = Redondear(venta.Detalle.Sum(x => x.Igv));
+				venta.Total = Redondear(venta.Subtotal + venta.Igv);
+			}
+
+			return ventas.Values.ToList();
+		}
+
+		public async Task<List<ComprobanteVentaListItemDto>> ListarComprobantesAsync()
+		{
+			var vouchers = new Dictionary<string, ComprobanteVentaListItemDto>(StringComparer.OrdinalIgnoreCase);
+
+			using var con = _conexion.ObtenerConexion();
+			await con.OpenAsync();
+
+			const string sql = """
+				SELECT
+					v.Id,
+					v.VentaId,
+					v.SunatTypeCode,
+					v.Series,
+					v.Number,
+					v.IssueDate,
+					v.DueDate,
+					v.Currency,
+					v.PaymentCondition,
+					v.Subtotal,
+					v.Igv,
+					v.Total,
+					v.SunatStatus,
+					v.SunatDocumentId,
+					v.XmlUrl,
+					v.CdrUrl,
+					v.PdfA4Url,
+					v.PdfA5Url,
+					v.Pdf58mmUrl,
+					v.Pdf80mmUrl,
+					v.CreatedAt,
+					v.UpdatedAt,
+					COALESCE(vp.DocumentType, '') AS ClienteTipoDocumento,
+					COALESCE(vp.DocumentNumber, '') AS ClienteDocumento,
+					COALESCE(vp.Name, '') AS ClienteNombre,
+					COALESCE(vp.Address, '') AS ClienteDireccion,
+					COALESCE(vo.Observation, '') AS Observation,
+					COALESCE(vi.Id, '00000000-0000-0000-0000-000000000000') AS ItemId,
+					COALESCE(vi.ProductId, 0) AS ProductId,
+					COALESCE(vi.ProductCode, '') AS ProductCode,
+					COALESCE(vi.Description, '') AS ItemDescription,
+					COALESCE(vi.Quantity, 0) AS ItemQuantity,
+					COALESCE(vi.UnitPrice, 0) AS ItemUnitPrice,
+					COALESCE(vi.Igv, 0) AS ItemIgv,
+					COALESCE(vi.Total, 0) AS ItemTotal,
+					COALESCE(vi.UnitCode, 'NIU') AS ItemUnitCode,
+					COALESCE(vi.LineNumber, 0) AS LineNumber,
+					COALESCE(inst.Id, '00000000-0000-0000-0000-000000000000') AS InstallmentId,
+					COALESCE(inst.InstallmentNumber, 0) AS InstallmentNumber,
+					COALESCE(inst.Amount, 0) AS InstallmentAmount,
+					inst.DueDate AS InstallmentDueDate,
+					COALESCE(st.OperationType, '') AS LastOperationType,
+					COALESCE(st.TransmissionStatus, '') AS LastTransmissionStatus,
+					COALESCE(st.HttpStatus, 0) AS LastHttpStatus,
+					COALESCE(st.ErrorMessage, '') AS LastErrorMessage,
+					st.RespondedAt AS LastRespondedAt
+				FROM dbo.Voucher v
+				LEFT JOIN dbo.VoucherParty vp
+					ON vp.VoucherId = v.Id
+				   AND vp.Role = 'CUSTOMER'
+				LEFT JOIN dbo.VoucherObservation vo
+					ON vo.VoucherId = v.Id
+				LEFT JOIN dbo.VoucherItem vi
+					ON vi.VoucherId = v.Id
+				LEFT JOIN dbo.VoucherInstallment inst
+					ON inst.VoucherId = v.Id
+				OUTER APPLY (
+					SELECT TOP 1
+						t.OperationType,
+						t.TransmissionStatus,
+						t.HttpStatus,
+						t.ErrorMessage,
+						t.RespondedAt
+					FROM dbo.SunatTransmission t
+					WHERE t.VoucherId = v.Id
+					ORDER BY t.CreatedAt DESC, t.AttemptNumber DESC
+				) st
+				WHERE v.SunatTypeCode IN ('01', '03')
+				ORDER BY v.CreatedAt DESC, vi.LineNumber ASC, inst.InstallmentNumber ASC, vo.LineNumber ASC;
+				""";
+
+			using var cmd = new SqlCommand(sql, con) { CommandType = CommandType.Text };
+			using var dr = await cmd.ExecuteReaderAsync();
+
+			while (await dr.ReadAsync())
+			{
+				var id = dr["Id"].ToString() ?? string.Empty;
+				if (string.IsNullOrWhiteSpace(id))
+				{
+					continue;
+				}
+
+				if (!vouchers.TryGetValue(id, out var voucher))
+				{
+					var paymentCondition = dr["PaymentCondition"]?.ToString() ?? string.Empty;
+					voucher = new ComprobanteVentaListItemDto
+					{
+						Id = id,
+						Tipo = dr["SunatTypeCode"]?.ToString() == TipoFacturaSunat ? "FACTURA" : "BOLETA",
+						Serie = dr["Series"]?.ToString() ?? string.Empty,
+						Numero = dr["Number"]?.ToString() ?? string.Empty,
+						FechaEmision = Convert.ToDateTime(dr["IssueDate"]).ToString("yyyy-MM-dd"),
+						Cliente = dr["ClienteNombre"]?.ToString() ?? string.Empty,
+						DocumentoCliente = dr["ClienteDocumento"]?.ToString() ?? string.Empty,
+						Subtotal = dr["Subtotal"] == DBNull.Value ? 0 : Convert.ToDecimal(dr["Subtotal"]),
+						Igv = dr["Igv"] == DBNull.Value ? 0 : Convert.ToDecimal(dr["Igv"]),
+						Total = dr["Total"] == DBNull.Value ? 0 : Convert.ToDecimal(dr["Total"]),
+						Estado = MapearEstadoUi(dr["LastOperationType"]?.ToString(), dr["LastTransmissionStatus"]?.ToString(), dr["SunatStatus"]?.ToString()),
+						EstadoSunat = MapearEstadoSunatUi(dr["SunatStatus"]?.ToString()),
+						TipoDocumentoCliente = MapearTipoDocumentoUi(dr["ClienteTipoDocumento"]?.ToString()),
+						DireccionCliente = dr["ClienteDireccion"]?.ToString() ?? string.Empty,
+						CorreoCliente = string.Empty,
+						CodigoRespuestaSunat = dr["LastHttpStatus"] == DBNull.Value || Convert.ToInt32(dr["LastHttpStatus"]) == 0
+							? string.Empty
+							: Convert.ToInt32(dr["LastHttpStatus"]).ToString(CultureInfo.InvariantCulture),
+						MensajeSunat = dr["LastErrorMessage"]?.ToString() ?? string.Empty,
+						FechaConsultaSunat = dr["LastRespondedAt"] == DBNull.Value
+							? Convert.ToDateTime(dr["UpdatedAt"]).ToString("s")
+							: Convert.ToDateTime(dr["LastRespondedAt"]).ToString("s"),
+						FechaEnvioSunat = Convert.ToDateTime(dr["UpdatedAt"]).ToString("s"),
+						DocumentId = dr["SunatDocumentId"]?.ToString(),
+						FileName = $"{_settings.Emisor.Ruc}-{dr["SunatTypeCode"]}-{dr["Series"]}-{dr["Number"]}",
+						PdfUrl = dr["PdfA4Url"] == DBNull.Value ? null : dr["PdfA4Url"].ToString(),
+						XmlUrl = dr["XmlUrl"] == DBNull.Value ? null : dr["XmlUrl"].ToString(),
+						CdrUrl = dr["CdrUrl"] == DBNull.Value ? null : dr["CdrUrl"].ToString(),
+						VentaOrigenId = dr["VentaId"] == DBNull.Value ? null : dr["VentaId"].ToString(),
+						FechaVencimiento = dr["DueDate"] == DBNull.Value ? null : Convert.ToDateTime(dr["DueDate"]).ToString("yyyy-MM-dd"),
+						Observaciones = null,
+						Pago = string.IsNullOrWhiteSpace(paymentCondition)
+							? null
+							: new ComprobanteVentaPagoDto
+							{
+								FormaPago = paymentCondition,
+								Cuotas = new List<ComprobanteVentaCuotaDto>()
+							}
+					};
+
+					vouchers.Add(id, voucher);
+				}
+
+				var observation = dr["Observation"]?.ToString();
+				if (!string.IsNullOrWhiteSpace(observation))
+				{
+					voucher.Observaciones = string.IsNullOrWhiteSpace(voucher.Observaciones)
+						? observation
+						: $"{voucher.Observaciones} # {observation}";
+				}
+
+				var itemId = dr["ItemId"]?.ToString();
+				if (!string.IsNullOrWhiteSpace(itemId) &&
+					!string.Equals(itemId, "00000000-0000-0000-0000-000000000000", StringComparison.OrdinalIgnoreCase) &&
+					!voucher.Detalle.Any(x => string.Equals(x.ItemId, itemId, StringComparison.OrdinalIgnoreCase)))
+				{
+					var cantidad = Convert.ToDecimal(dr["ItemQuantity"]);
+					var precio = Convert.ToDecimal(dr["ItemUnitPrice"]);
+					var igv = Convert.ToDecimal(dr["ItemIgv"]);
+					var importe = dr["ItemTotal"] == DBNull.Value ? Redondear((cantidad * precio) + igv) : Convert.ToDecimal(dr["ItemTotal"]);
+
+					voucher.Detalle.Add(new VentaComprobanteDetalleDto
+					{
+						ItemId = itemId,
+						ProductoId = Convert.ToInt32(dr["ProductId"]) <= 0 ? null : Convert.ToInt32(dr["ProductId"]),
+						Codigo = dr["ProductCode"]?.ToString() ?? string.Empty,
+						ProductoServicio = dr["ItemDescription"]?.ToString() ?? string.Empty,
+						Cantidad = cantidad,
+						Precio = precio,
+						Igv = igv,
+						Importe = importe,
+						UnidadMedida = dr["ItemUnitCode"]?.ToString() ?? "NIU"
+					});
+				}
+
+				var installmentId = dr["InstallmentId"]?.ToString();
+				if (!string.IsNullOrWhiteSpace(installmentId) &&
+					!string.Equals(installmentId, "00000000-0000-0000-0000-000000000000", StringComparison.OrdinalIgnoreCase) &&
+					voucher.Pago is not null &&
+					!voucher.Pago.Cuotas.Any(x =>
+						x.Numero == Convert.ToInt32(dr["InstallmentNumber"])))
+				{
+					voucher.Pago.Cuotas.Add(new ComprobanteVentaCuotaDto
+					{
+						Numero = Convert.ToInt32(dr["InstallmentNumber"]),
+						Monto = Convert.ToDecimal(dr["InstallmentAmount"]),
+						FechaVencimiento = dr["InstallmentDueDate"] == DBNull.Value
+							? string.Empty
+							: Convert.ToDateTime(dr["InstallmentDueDate"]).ToString("yyyy-MM-dd")
+					});
+				}
+			}
+
+			foreach (var voucher in vouchers.Values)
+			{
+				if (voucher.Pago is not null)
+				{
+					voucher.Pago.Cuotas = voucher.Pago.Cuotas
+						.OrderBy(x => x.Numero)
+						.ToList();
+				}
+			}
+
+			return vouchers.Values.ToList();
+		}
+
+		public async Task<ComprobanteVentaListItemDto> ObtenerComprobantePorIdAsync(string id)
+		{
+			if (!Guid.TryParse(id, out var voucherId))
+			{
+				throw new InvalidOperationException("El identificador del voucher no es válido.");
+			}
+
+			return (await ListarComprobantesAsync()).FirstOrDefault(x => string.Equals(x.Id, voucherId.ToString(), StringComparison.OrdinalIgnoreCase))
+				?? throw new InvalidOperationException("No se encontró el comprobante seleccionado.");
+		}
+
+		public async Task<ComprobanteVentaListItemDto> SincronizarEstadoSunatAsync(string id)
+		{
+			var voucher = await ObtenerComprobantePorIdAsync(id);
+			if (string.IsNullOrWhiteSpace(voucher.DocumentId))
+			{
+				throw new InvalidOperationException("El comprobante no tiene documentId registrado en APISUNAT.");
+			}
+
+			var consulta = await _facturacionSunatService.ObtenerDocumentoPorId(voucher.DocumentId);
+			if (!consulta.Exitoso)
+			{
+				throw new InvalidOperationException(consulta.DetalleError ?? consulta.MensajeSunat ?? consulta.Mensaje);
+			}
+
+			using var con = _conexion.ObtenerConexion();
+			await con.OpenAsync();
+			await ActualizarVoucherPostConsultaAsync(con, id, consulta);
+			await RegistrarTransmisionAsync(con, id, "STATUS_QUERY", consulta);
+
+			return await ObtenerComprobantePorIdAsync(id);
+		}
+
+		public async Task<(byte[] Content, string ContentType, string FileName)> DescargarPdfAsync(string id, string format)
+		{
+			var voucher = await ObtenerComprobantePorIdAsync(id);
+			if (string.IsNullOrWhiteSpace(voucher.DocumentId))
+			{
+				throw new InvalidOperationException("El comprobante no tiene documentId registrado en APISUNAT.");
+			}
+
+			var formato = (format ?? string.Empty).Trim();
+			if (formato is not ("A4" or "A5" or "ticket58mm" or "ticket80mm"))
+			{
+				throw new InvalidOperationException("El formato PDF solicitado no es válido.");
+			}
+
+			var fileName = string.IsNullOrWhiteSpace(voucher.FileName)
+				? $"{_settings.Emisor.Ruc}-{(voucher.Tipo == "FACTURA" ? TipoFacturaSunat : TipoBoletaSunat)}-{voucher.Serie}-{voucher.Numero}"
+				: voucher.FileName;
+
+			return await _facturacionSunatService.DescargarPdf(voucher.DocumentId, formato, fileName);
+		}
+
+		public async Task<ComprobanteVentaListItemDto> AnularAsync(string id, string reason)
+		{
+			var voucher = await ObtenerComprobantePorIdAsync(id);
+			if (string.IsNullOrWhiteSpace(voucher.DocumentId))
+			{
+				throw new InvalidOperationException("El comprobante no tiene documentId registrado en APISUNAT.");
+			}
+
+			var motivo = (reason ?? string.Empty).Trim();
+			if (motivo.Length < 3 || motivo.Length > 100)
+			{
+				throw new InvalidOperationException("El motivo de anulación debe tener entre 3 y 100 caracteres.");
+			}
+
+			var resultado = await _facturacionSunatService.AnularDocumento(voucher.DocumentId, motivo);
+			if (!resultado.Exitoso)
+			{
+				throw new InvalidOperationException(resultado.DetalleError ?? resultado.MensajeSunat ?? resultado.Mensaje);
+			}
+
+			using var con = _conexion.ObtenerConexion();
+			await con.OpenAsync();
+			await ActualizarVoucherPostAnulacionAsync(con, id, resultado);
+			await RegistrarTransmisionAsync(con, id, "VOID", resultado);
+
+			return await ObtenerComprobantePorIdAsync(id);
+		}
+
+		public async Task<ComprobanteVentaListItemDto> EmitirAsync(ComprobanteVentaEmitirRequestDto request)
+		{
+			if (string.IsNullOrWhiteSpace(_settings.Emisor?.Ruc) || string.IsNullOrWhiteSpace(_settings.Emisor.RazonSocial))
+			{
+				throw new InvalidOperationException("Falta FacturacionSettings:Emisor:Ruc o RazonSocial.");
+			}
+
+			var tipo = (request.Tipo ?? string.Empty).Trim().ToUpperInvariant();
+			if (tipo is not ("BOLETA" or "FACTURA"))
+			{
+				throw new InvalidOperationException("Solo se permite emitir boleta o factura desde este módulo.");
+			}
+
+			var venta = await ObtenerVentaAsync(request.VentaOrigenId);
+			AplicarClientePreferido(venta, request.Cliente);
+
+			var fechaEmision = ParsearFechaObligatoria(request.FechaEmision, "La fecha de emisión es obligatoria.");
+			var fechaVencimiento = string.IsNullOrWhiteSpace(request.FechaVencimiento)
+				? (DateTime?)null
+				: ParsearFechaObligatoria(request.FechaVencimiento, "La fecha de vencimiento no es válida.");
+			var moneda = (request.Moneda ?? "PEN").Trim().ToUpperInvariant();
+			var pagoNormalizado = NormalizarPago(request.Pago);
+
+			ValidarSolicitud(tipo, venta, fechaEmision, fechaVencimiento, moneda, pagoNormalizado);
+
+			var serie = tipo == "FACTURA" ? SerieFactura : SerieBoleta;
+			var tipoComprobanteSunat = tipo == "FACTURA" ? TipoFacturaSunat : TipoBoletaSunat;
+			var horaEmision = DateTime.Now.ToString("HH:mm:ss");
+			var voucherId = Guid.NewGuid();
+			string numero;
+
+			using (var con = _conexion.ObtenerConexion())
+			{
+				await con.OpenAsync();
+				using var tx = con.BeginTransaction();
+
+				await ValidarVentaSinComprobanteAsync(con, tx, request.VentaOrigenId);
+				numero = await GenerarNumeroAleatorioDisponibleAsync(con, tx, tipoComprobanteSunat, serie);
+
+				await InsertarVoucherPendienteAsync(con, tx, voucherId, request.VentaOrigenId, tipoComprobanteSunat, serie, numero, fechaEmision, fechaVencimiento, moneda, venta, pagoNormalizado);
+				await InsertarVoucherPartyAsync(con, tx, voucherId, venta.Cliente);
+				await InsertarVoucherItemsAsync(con, tx, voucherId, venta.Detalle);
+				await InsertarVoucherObservationsAsync(con, tx, voucherId, request.Observaciones);
+				await InsertarVoucherInstallmentsAsync(con, tx, voucherId, pagoNormalizado);
+				tx.Commit();
+			}
+
+			var boletaRequest = tipo == "BOLETA" ? CrearBoletaRequest(serie, numero, fechaEmision, horaEmision, moneda, venta) : null;
+			var facturaRequest = tipo == "FACTURA" ? CrearFacturaRequest(serie, numero, fechaEmision, fechaVencimiento, horaEmision, moneda, venta, pagoNormalizado) : null;
+			var documentBody = tipo == "BOLETA"
+				? _boletaBuilder.Build(boletaRequest!)
+				: _facturaBuilder.Build(facturaRequest!);
+			var fileName = $"{_settings.Emisor.Ruc}-{tipoComprobanteSunat}-{serie}-{numero}";
+			var envio = await _facturacionSunatService.EnviarDocumento(fileName, documentBody);
+
+			using (var con = _conexion.ObtenerConexion())
+			{
+				await con.OpenAsync();
+				await ActualizarVoucherPostEnvioAsync(con, voucherId, envio);
+				await RegistrarTransmisionAsync(con, voucherId.ToString(), "SEND", envio);
+			}
+
+			return await ObtenerComprobantePorIdAsync(voucherId.ToString());
+		}
+
+		private async Task<VentaComprobanteDisponibleDto> ObtenerVentaAsync(int ventaId)
+		{
+			var ventas = await ListarVentasDisponiblesAsync();
+			var venta = ventas.FirstOrDefault(x => x.Id == ventaId.ToString());
+			if (venta is null)
+			{
+				throw new InvalidOperationException("La venta seleccionada no existe.");
+			}
+
+			if (venta.Detalle.Count == 0)
+			{
+				throw new InvalidOperationException("La venta seleccionada no tiene detalle para emitir comprobante.");
+			}
+
+			return venta;
+		}
+
+		private static string GenerarNumeroAleatorio()
+		{
+			return Random.Shared.Next(0, 100_000_000).ToString("D8");
+		}
+
+		private static async Task ValidarVentaSinComprobanteAsync(SqlConnection con, SqlTransaction tx, int ventaId)
+		{
+			const string sql = """
+				SELECT TOP 1
+					Series,
+					Number,
+					SunatTypeCode
+				FROM dbo.Voucher
+				WHERE VentaId = @VentaId
+				  AND SunatTypeCode IN ('01', '03');
+				""";
+
+			using var cmd = new SqlCommand(sql, con, tx);
+			cmd.Parameters.AddWithValue("@VentaId", ventaId);
+
+			using var dr = await cmd.ExecuteReaderAsync();
+			if (await dr.ReadAsync())
+			{
+				var serie = dr["Series"]?.ToString() ?? string.Empty;
+				var number = dr["Number"]?.ToString() ?? string.Empty;
+				var tipo = (dr["SunatTypeCode"]?.ToString() ?? string.Empty) switch
+				{
+					"01" => "factura",
+					"03" => "boleta",
+					_ => "comprobante"
+				};
+
+				throw new InvalidOperationException($"La venta ya tiene un {tipo} emitido: {serie}-{number}.");
+			}
+		}
+
+		private async Task<string> GenerarNumeroAleatorioDisponibleAsync(SqlConnection con, SqlTransaction tx, string tipoComprobanteSunat, string serie)
+		{
+			const string sql = """
+				SELECT COUNT(1)
+				FROM dbo.Voucher
+				WHERE SunatTypeCode = @tipo
+				  AND Series = @serie
+				  AND IssuerRuc = @issuerRuc
+				  AND Number = @number;
+				""";
+
+			for (var intento = 0; intento < 100; intento++)
+			{
+				var numero = GenerarNumeroAleatorio();
+				using var cmd = new SqlCommand(sql, con, tx);
+				cmd.Parameters.AddWithValue("@tipo", tipoComprobanteSunat);
+				cmd.Parameters.AddWithValue("@serie", serie);
+				cmd.Parameters.AddWithValue("@issuerRuc", _settings.Emisor.Ruc);
+				cmd.Parameters.AddWithValue("@number", numero);
+
+				var existe = Convert.ToInt32(await cmd.ExecuteScalarAsync()) > 0;
+				if (!existe)
+				{
+					return numero;
+				}
+			}
+
+			throw new InvalidOperationException("No se pudo generar un número aleatorio único para el comprobante.");
+		}
+
+		private async Task InsertarVoucherPendienteAsync(
+			SqlConnection con,
+			SqlTransaction tx,
+			Guid voucherId,
+			int ventaOrigenId,
+			string tipoComprobanteSunat,
+			string serie,
+			string numero,
+			DateTime fechaEmision,
+			DateTime? fechaVencimiento,
+			string moneda,
+			VentaComprobanteDisponibleDto venta,
+			ComprobanteVentaPagoDto? pago)
+		{
+			const string sql = """
+				INSERT INTO dbo.Voucher
+				(
+					Id,
+					VentaId,
+					SunatTypeCode,
+					Series,
+					Number,
+					IssuerRuc,
+					IssuerLegalName,
+					IssueDate,
+					DueDate,
+					Currency,
+					PaymentCondition,
+					Subtotal,
+					Igv,
+					Total,
+					SunatStatus
+				)
+				VALUES
+				(
+					@Id,
+					@VentaId,
+					@SunatTypeCode,
+					@Series,
+					@Number,
+					@IssuerRuc,
+					@IssuerLegalName,
+					@IssueDate,
+					@DueDate,
+					@Currency,
+					@PaymentCondition,
+					@Subtotal,
+					@Igv,
+					@Total,
+					CASE
+						WHEN @SunatStatus IN ('NO_ENVIADO', 'PENDIENTE', 'ACEPTADO', 'RECHAZADO', 'EXCEPCION') THEN @SunatStatus
+						ELSE 'NO_ENVIADO'
+					END
+				);
+				""";
+
+			using var cmd = new SqlCommand(sql, con, tx);
+			cmd.Parameters.AddWithValue("@Id", voucherId);
+			cmd.Parameters.AddWithValue("@VentaId", ventaOrigenId);
+			cmd.Parameters.AddWithValue("@SunatTypeCode", tipoComprobanteSunat);
+			cmd.Parameters.AddWithValue("@Series", serie);
+			cmd.Parameters.AddWithValue("@Number", numero);
+			cmd.Parameters.AddWithValue("@IssuerRuc", _settings.Emisor.Ruc);
+			cmd.Parameters.AddWithValue("@IssuerLegalName", _settings.Emisor.RazonSocial);
+			cmd.Parameters.AddWithValue("@IssueDate", fechaEmision.Date);
+			cmd.Parameters.AddWithValue("@DueDate", (object?)fechaVencimiento?.Date ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@Currency", moneda);
+			cmd.Parameters.AddWithValue("@PaymentCondition", (object?)pago?.FormaPago ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@Subtotal", venta.Subtotal);
+			cmd.Parameters.AddWithValue("@Igv", venta.Igv);
+			cmd.Parameters.AddWithValue("@Total", venta.Total);
+			cmd.Parameters.Add("@SunatStatus", SqlDbType.VarChar, 30).Value = "NO_ENVIADO";
+			await cmd.ExecuteNonQueryAsync();
+		}
+
+		private static async Task InsertarVoucherPartyAsync(SqlConnection con, SqlTransaction tx, Guid voucherId, ComprobanteVentaClienteDto cliente)
+		{
+			const string sql = """
+				INSERT INTO dbo.VoucherParty
+				(
+					Id,
+					VoucherId,
+					Role,
+					DocumentType,
+					DocumentNumber,
+					Name,
+					Address
+				)
+				VALUES
+				(
+					@Id,
+					@VoucherId,
+					'CUSTOMER',
+					@DocumentType,
+					@DocumentNumber,
+					@Name,
+					@Address
+				);
+				""";
+
+			using var cmd = new SqlCommand(sql, con, tx);
+			cmd.Parameters.AddWithValue("@Id", Guid.NewGuid());
+			cmd.Parameters.AddWithValue("@VoucherId", voucherId);
+			cmd.Parameters.AddWithValue("@DocumentType", string.IsNullOrWhiteSpace(cliente.TipoDocumento) ? DBNull.Value : cliente.TipoDocumento);
+			cmd.Parameters.AddWithValue("@DocumentNumber", string.IsNullOrWhiteSpace(cliente.Documento) ? DBNull.Value : cliente.Documento);
+			cmd.Parameters.AddWithValue("@Name", string.IsNullOrWhiteSpace(cliente.Nombre) ? DBNull.Value : cliente.Nombre);
+			cmd.Parameters.AddWithValue("@Address", string.IsNullOrWhiteSpace(cliente.Direccion) ? DBNull.Value : cliente.Direccion);
+			await cmd.ExecuteNonQueryAsync();
+		}
+
+		private static async Task InsertarVoucherItemsAsync(SqlConnection con, SqlTransaction tx, Guid voucherId, List<VentaComprobanteDetalleDto> detalle)
+		{
+			const string sql = """
+				INSERT INTO dbo.VoucherItem
+				(
+					Id,
+					VoucherId,
+					LineNumber,
+					ProductId,
+					ProductCode,
+					Description,
+					Quantity,
+					UnitCode,
+					UnitPrice,
+					SaleValue,
+					IgvPercentage,
+					Igv,
+					Total
+				)
+				VALUES
+				(
+					@Id,
+					@VoucherId,
+					@LineNumber,
+					@ProductId,
+					@ProductCode,
+					@Description,
+					@Quantity,
+					@UnitCode,
+					@UnitPrice,
+					@SaleValue,
+					@IgvPercentage,
+					@Igv,
+					@Total
+				);
+				""";
+
+			for (var i = 0; i < detalle.Count; i++)
+			{
+				var item = detalle[i];
+				using var cmd = new SqlCommand(sql, con, tx);
+				cmd.Parameters.AddWithValue("@Id", Guid.NewGuid());
+				cmd.Parameters.AddWithValue("@VoucherId", voucherId);
+				cmd.Parameters.AddWithValue("@LineNumber", i + 1);
+				cmd.Parameters.AddWithValue("@ProductId", (object?)item.ProductoId ?? DBNull.Value);
+				cmd.Parameters.AddWithValue("@ProductCode", string.IsNullOrWhiteSpace(item.Codigo) ? DBNull.Value : item.Codigo);
+				cmd.Parameters.AddWithValue("@Description", item.ProductoServicio);
+				cmd.Parameters.AddWithValue("@Quantity", item.Cantidad);
+				cmd.Parameters.AddWithValue("@UnitCode", string.IsNullOrWhiteSpace(item.UnidadMedida) ? "NIU" : item.UnidadMedida);
+				cmd.Parameters.AddWithValue("@UnitPrice", item.Precio);
+				cmd.Parameters.AddWithValue("@SaleValue", Redondear(item.Cantidad * item.Precio));
+				cmd.Parameters.AddWithValue("@IgvPercentage", ObtenerPorcentajeIgv(item));
+				cmd.Parameters.AddWithValue("@Igv", item.Igv);
+				cmd.Parameters.AddWithValue("@Total", item.Importe);
+				await cmd.ExecuteNonQueryAsync();
+			}
+		}
+
+		private static async Task InsertarVoucherObservationsAsync(SqlConnection con, SqlTransaction tx, Guid voucherId, string? observaciones)
+		{
+			var lineas = SepararObservaciones(observaciones);
+			if (lineas.Count == 0)
+			{
+				return;
+			}
+
+			const string sql = """
+				INSERT INTO dbo.VoucherObservation
+				(
+					Id,
+					VoucherId,
+					LineNumber,
+					Observation
+				)
+				VALUES
+				(
+					@Id,
+					@VoucherId,
+					@LineNumber,
+					@Observation
+				);
+				""";
+
+			for (var i = 0; i < lineas.Count; i++)
+			{
+				using var cmd = new SqlCommand(sql, con, tx);
+				cmd.Parameters.AddWithValue("@Id", Guid.NewGuid());
+				cmd.Parameters.AddWithValue("@VoucherId", voucherId);
+				cmd.Parameters.AddWithValue("@LineNumber", i + 1);
+				cmd.Parameters.AddWithValue("@Observation", lineas[i]);
+				await cmd.ExecuteNonQueryAsync();
+			}
+		}
+
+		private static async Task InsertarVoucherInstallmentsAsync(SqlConnection con, SqlTransaction tx, Guid voucherId, ComprobanteVentaPagoDto? pago)
+		{
+			if (pago is null || !string.Equals(pago.FormaPago, "CREDITO", StringComparison.OrdinalIgnoreCase))
+			{
+				return;
+			}
+
+			const string sql = """
+				INSERT INTO dbo.VoucherInstallment
+				(
+					Id,
+					VoucherId,
+					InstallmentNumber,
+					Amount,
+					DueDate
+				)
+				VALUES
+				(
+					@Id,
+					@VoucherId,
+					@InstallmentNumber,
+					@Amount,
+					@DueDate
+				);
+				""";
+
+			for (var i = 0; i < pago.Cuotas.Count; i++)
+			{
+				var cuota = pago.Cuotas[i];
+				using var cmd = new SqlCommand(sql, con, tx);
+				cmd.Parameters.AddWithValue("@Id", Guid.NewGuid());
+				cmd.Parameters.AddWithValue("@VoucherId", voucherId);
+				cmd.Parameters.AddWithValue("@InstallmentNumber", i + 1);
+				cmd.Parameters.AddWithValue("@Amount", cuota.Monto);
+				cmd.Parameters.AddWithValue("@DueDate", ParsearFechaObligatoria(cuota.FechaVencimiento, "La fecha de vencimiento de la cuota no es válida."));
+				await cmd.ExecuteNonQueryAsync();
+			}
+		}
+
+		private async Task ActualizarVoucherPostEnvioAsync(SqlConnection con, Guid voucherId, FacturacionEnvioResultado envio)
+		{
+			const string sql = """
+				UPDATE dbo.Voucher
+				SET
+					SunatStatus = CASE
+						WHEN @SunatStatus IN ('NO_ENVIADO', 'PENDIENTE', 'ACEPTADO', 'RECHAZADO', 'EXCEPCION') THEN @SunatStatus
+						ELSE 'EXCEPCION'
+					END,
+					SunatDocumentId = @SunatDocumentId,
+					XmlUrl = @XmlUrl,
+					CdrUrl = @CdrUrl,
+					PdfA4Url = @PdfA4Url,
+					PdfA5Url = @PdfA5Url,
+					Pdf58mmUrl = @Pdf58mmUrl,
+					Pdf80mmUrl = @Pdf80mmUrl,
+					UpdatedAt = SYSUTCDATETIME()
+				WHERE Id = @Id;
+				""";
+
+			var urlsPdf = ExtraerUrlsPdf(envio.RespuestaApi);
+			var sunatStatus = NormalizarSunatStatusParaVoucher(envio);
+			using var cmd = new SqlCommand(sql, con);
+			cmd.Parameters.AddWithValue("@Id", voucherId);
+			cmd.Parameters.Add("@SunatStatus", SqlDbType.VarChar, 30).Value = sunatStatus;
+			cmd.Parameters.AddWithValue("@SunatDocumentId", (object?)envio.DocumentId ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@XmlUrl", (object?)envio.XmlUrl ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@CdrUrl", (object?)envio.CdrUrl ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@PdfA4Url", (object?)urlsPdf.A4 ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@PdfA5Url", (object?)urlsPdf.A5 ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@Pdf58mmUrl", (object?)urlsPdf.Ticket58 ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@Pdf80mmUrl", (object?)urlsPdf.Ticket80 ?? DBNull.Value);
+			await cmd.ExecuteNonQueryAsync();
+		}
+
+		private async Task ActualizarVoucherPostConsultaAsync(SqlConnection con, string voucherId, FacturacionEnvioResultado consulta)
+		{
+			const string sql = """
+				UPDATE dbo.Voucher
+				SET
+					SunatStatus = CASE
+						WHEN @SunatStatus IN ('NO_ENVIADO', 'PENDIENTE', 'ACEPTADO', 'RECHAZADO', 'EXCEPCION') THEN @SunatStatus
+						ELSE 'EXCEPCION'
+					END,
+					SunatDocumentId = COALESCE(@SunatDocumentId, SunatDocumentId),
+					XmlUrl = COALESCE(@XmlUrl, XmlUrl),
+					CdrUrl = COALESCE(@CdrUrl, CdrUrl),
+					UpdatedAt = SYSUTCDATETIME()
+				WHERE Id = @Id;
+				""";
+
+			var sunatStatus = NormalizarSunatStatusParaVoucher(consulta);
+			using var cmd = new SqlCommand(sql, con);
+			cmd.Parameters.AddWithValue("@Id", Guid.Parse(voucherId));
+			cmd.Parameters.Add("@SunatStatus", SqlDbType.VarChar, 30).Value = sunatStatus;
+			cmd.Parameters.AddWithValue("@SunatDocumentId", (object?)consulta.DocumentId ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@XmlUrl", (object?)consulta.XmlUrl ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@CdrUrl", (object?)consulta.CdrUrl ?? DBNull.Value);
+			await cmd.ExecuteNonQueryAsync();
+		}
+
+		private async Task ActualizarVoucherPostAnulacionAsync(SqlConnection con, string voucherId, FacturacionEnvioResultado resultado)
+		{
+			const string sql = """
+				UPDATE dbo.Voucher
+				SET
+					SunatStatus = CASE
+						WHEN @SunatStatus IN ('NO_ENVIADO', 'PENDIENTE', 'ACEPTADO', 'RECHAZADO', 'EXCEPCION') THEN @SunatStatus
+						ELSE 'EXCEPCION'
+					END,
+					UpdatedAt = SYSUTCDATETIME()
+				WHERE Id = @Id;
+				""";
+
+			var sunatStatus = NormalizarSunatStatusParaVoucher(resultado);
+			using var cmd = new SqlCommand(sql, con);
+			cmd.Parameters.AddWithValue("@Id", Guid.Parse(voucherId));
+			cmd.Parameters.Add("@SunatStatus", SqlDbType.VarChar, 30).Value = sunatStatus;
+			await cmd.ExecuteNonQueryAsync();
+		}
+
+		private async Task RegistrarTransmisionAsync(SqlConnection con, string voucherId, string operationType, FacturacionEnvioResultado resultado)
+		{
+			var nextAttempt = await ObtenerSiguienteIntentoAsync(con, voucherId, operationType);
+
+			const string sql = """
+				INSERT INTO dbo.SunatTransmission
+				(
+					Id,
+					VoucherId,
+					AttemptNumber,
+					OperationType,
+					TransmissionStatus,
+					HttpStatus,
+					SunatStatus,
+					SunatDocumentId,
+					ErrorMessage,
+					IsRetryable,
+					RespondedAt
+				)
+				VALUES
+				(
+					@Id,
+					@VoucherId,
+					@AttemptNumber,
+					@OperationType,
+					@TransmissionStatus,
+					@HttpStatus,
+					@SunatStatus,
+					@SunatDocumentId,
+					@ErrorMessage,
+					@IsRetryable,
+					@RespondedAt
+				);
+				""";
+
+			using var cmd = new SqlCommand(sql, con);
+			cmd.Parameters.AddWithValue("@Id", Guid.NewGuid());
+			cmd.Parameters.AddWithValue("@VoucherId", Guid.Parse(voucherId));
+			cmd.Parameters.AddWithValue("@AttemptNumber", nextAttempt);
+			cmd.Parameters.AddWithValue("@OperationType", operationType);
+			cmd.Parameters.AddWithValue("@TransmissionStatus", resultado.Exitoso ? "SUCCESS" : "ERROR");
+			cmd.Parameters.AddWithValue("@HttpStatus", resultado.StatusCode > 0 ? resultado.StatusCode : DBNull.Value);
+			cmd.Parameters.Add("@SunatStatus", SqlDbType.VarChar, 30).Value = NormalizarSunatStatusParaVoucher(resultado);
+			cmd.Parameters.AddWithValue("@SunatDocumentId", (object?)resultado.DocumentId ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@ErrorMessage", (object?)(resultado.DetalleError ?? resultado.MensajeSunat ?? resultado.Mensaje) ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@IsRetryable", EsRetryable(resultado));
+			cmd.Parameters.AddWithValue("@RespondedAt", DateTime.UtcNow);
+			await cmd.ExecuteNonQueryAsync();
+		}
+
+		private static async Task<int> ObtenerSiguienteIntentoAsync(SqlConnection con, string voucherId, string operationType)
+		{
+			const string sql = """
+				SELECT ISNULL(MAX(AttemptNumber), 0) + 1
+				FROM dbo.SunatTransmission
+				WHERE VoucherId = @VoucherId
+				  AND OperationType = @OperationType;
+				""";
+
+			using var cmd = new SqlCommand(sql, con);
+			cmd.Parameters.AddWithValue("@VoucherId", Guid.Parse(voucherId));
+			cmd.Parameters.AddWithValue("@OperationType", operationType);
+			return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+		}
+
+		private static void AplicarClientePreferido(VentaComprobanteDisponibleDto venta, ComprobanteVentaClienteDto? clienteRequest)
+		{
+			if (clienteRequest is null)
+			{
+				return;
+			}
+			
+			if (!string.IsNullOrWhiteSpace(clienteRequest.TipoDocumento))
+			{
+				venta.Cliente.TipoDocumento = clienteRequest.TipoDocumento.Trim().ToUpperInvariant();
+			}
+
+			if (!string.IsNullOrWhiteSpace(clienteRequest.Documento))
+			{
+				venta.Cliente.Documento = clienteRequest.Documento.Trim();
+			}
+
+			if (!string.IsNullOrWhiteSpace(clienteRequest.Nombre))
+			{
+				venta.Cliente.Nombre = clienteRequest.Nombre.Trim();
+			}
+
+			if (!string.IsNullOrWhiteSpace(clienteRequest.Direccion))
+			{
+				venta.Cliente.Direccion = clienteRequest.Direccion.Trim();
+			}
+
+			if (!string.IsNullOrWhiteSpace(clienteRequest.Correo))
+			{
+				venta.Cliente.Correo = clienteRequest.Correo.Trim();
+			}
+		}
+
+		private static ComprobanteVentaPagoDto? NormalizarPago(ComprobanteVentaPagoDto? pago)
+		{
+			if (pago is null)
+			{
+				return null;
+			}
+
+			pago.FormaPago = (pago.FormaPago ?? string.Empty).Trim().ToUpperInvariant();
+			pago.Cuotas ??= new List<ComprobanteVentaCuotaDto>();
+
+			foreach (var cuota in pago.Cuotas)
+			{
+				cuota.FechaVencimiento = (cuota.FechaVencimiento ?? string.Empty).Trim();
+			}
+
+			return pago;
+		}
+
+		private static void ValidarSolicitud(
+			string tipo,
+			VentaComprobanteDisponibleDto venta,
+			DateTime fechaEmision,
+			DateTime? fechaVencimiento,
+			string moneda,
+			ComprobanteVentaPagoDto? pago)
+		{
+			if (moneda is not ("PEN" or "USD"))
+			{
+				throw new InvalidOperationException("La moneda permitida es PEN o USD.");
+			}
+
+			if (venta.Detalle.Count == 0 || venta.Detalle.Any(x =>
+				x.Cantidad <= 0 ||
+				x.Precio < 0 ||
+				string.IsNullOrWhiteSpace(x.ProductoServicio)))
+			{
+				throw new InvalidOperationException("La venta debe contener al menos un ítem válido.");
+			}
+
+			if (tipo == "BOLETA")
+			{
+				ValidarBoleta(venta.Cliente);
+				return;
+			}
+
+			ValidarFactura(venta.Cliente, fechaEmision, fechaVencimiento, venta.Total, pago);
+		}
+
+		private static void ValidarBoleta(ComprobanteVentaClienteDto cliente)
+		{
+			var documento = (cliente.Documento ?? string.Empty).Trim();
+			var tipoDocumento = (cliente.TipoDocumento ?? string.Empty).Trim().ToUpperInvariant();
+
+			if (string.IsNullOrWhiteSpace(documento))
+			{
+				return;
+			}
+
+			if (tipoDocumento is not ("DNI" or "RUC" or "CE"))
+			{
+				throw new InvalidOperationException("En boleta solo se permite DNI, RUC o CE.");
+			}
+
+			if (!DocumentoValido(tipoDocumento, documento))
+			{
+				throw new InvalidOperationException("El documento del cliente no cumple el formato esperado.");
+			}
+
+			if (string.IsNullOrWhiteSpace(cliente.Nombre) || string.IsNullOrWhiteSpace(cliente.Direccion))
+			{
+				throw new InvalidOperationException("Si la boleta tiene documento, el nombre y la dirección son obligatorios.");
+			}
+		}
+
+		private static void ValidarFactura(
+			ComprobanteVentaClienteDto cliente,
+			DateTime fechaEmision,
+			DateTime? fechaVencimiento,
+			decimal total,
+			ComprobanteVentaPagoDto? pago)
+		{
+			if (string.IsNullOrWhiteSpace(cliente.Nombre))
+			{
+				throw new InvalidOperationException("La razón social del cliente es obligatoria para factura.");
+			}
+
+			if (!string.Equals((cliente.TipoDocumento ?? string.Empty).Trim(), "RUC", StringComparison.OrdinalIgnoreCase))
+			{
+				throw new InvalidOperationException("La factura solo permite RUC como tipo de documento.");
+			}
+
+			if (!DocumentoValido("RUC", cliente.Documento))
+			{
+				throw new InvalidOperationException("El RUC del cliente debe tener 11 dígitos.");
+			}
+
+			if (fechaVencimiento.HasValue && fechaVencimiento.Value.Date <= fechaEmision.Date)
+			{
+				throw new InvalidOperationException("La fecha de vencimiento debe ser mayor a la fecha de emisión.");
+			}
+
+			if (pago is null || string.IsNullOrWhiteSpace(pago.FormaPago))
+			{
+				throw new InvalidOperationException("La factura requiere forma de pago.");
+			}
+
+			if (pago.FormaPago is not ("CONTADO" or "CREDITO"))
+			{
+				throw new InvalidOperationException("La forma de pago permitida es CONTADO o CREDITO.");
+			}
+
+			if (pago.FormaPago == "CONTADO")
+			{
+				if (pago.Cuotas.Count > 0)
+				{
+					throw new InvalidOperationException("La factura al contado no debe registrar cuotas.");
+				}
+
+				return;
+			}
+
+			if (pago.Cuotas.Count == 0)
+			{
+				throw new InvalidOperationException("La factura a crédito debe registrar al menos una cuota.");
+			}
+
+			var sumaCuotas = 0m;
+			foreach (var cuota in pago.Cuotas)
+			{
+				if (cuota.Monto <= 0 || cuota.Monto > total)
+				{
+					throw new InvalidOperationException("Cada cuota debe ser mayor a 0.01 y no superar el total del comprobante.");
+				}
+
+				var fechaCuota = ParsearFechaObligatoria(cuota.FechaVencimiento, "La fecha de vencimiento de la cuota no es válida.");
+				if (fechaCuota.Date <= DateTime.Today)
+				{
+					throw new InvalidOperationException("Cada cuota debe vencer después del día actual.");
+				}
+
+				sumaCuotas += cuota.Monto;
+			}
+
+			if (Redondear(sumaCuotas) != Redondear(total))
+			{
+				throw new InvalidOperationException("La suma de cuotas debe coincidir exactamente con el importe total de la factura.");
+			}
+		}
+
+		private static BoletaRequestDto CrearBoletaRequest(
+			string serie,
+			string numero,
+			DateTime fechaEmision,
+			string horaEmision,
+			string moneda,
+			VentaComprobanteDisponibleDto venta)
+		{
+			return new BoletaRequestDto
+			{
+				Serie = serie,
+				Correlativo = numero,
+				FechaEmision = fechaEmision.ToString("yyyy-MM-dd"),
+				HoraEmision = horaEmision,
+				Moneda = moneda,
+				MontoEnLetras = MontoEnLetras.EnSoles(venta.Total),
+				Cliente = new BoletaClienteDto
+				{
+					TipoDocumento = MapearTipoDocumentoSunat(venta.Cliente.TipoDocumento, false),
+					NumeroDocumento = string.IsNullOrWhiteSpace(venta.Cliente.Documento) ? "-" : venta.Cliente.Documento,
+					Nombre = string.IsNullOrWhiteSpace(venta.Cliente.Nombre) ? "CLIENTES VARIOS" : venta.Cliente.Nombre,
+					Direccion = string.IsNullOrWhiteSpace(venta.Cliente.Direccion) ? null : venta.Cliente.Direccion
+				},
+				Totales = new BoletaTotalesDto
+				{
+					ValorVenta = venta.Subtotal,
+					Igv = venta.Igv,
+					Total = venta.Total
+				},
+				Items = venta.Detalle.Select(x => new BoletaItemDto
+				{
+					Descripcion = x.ProductoServicio,
+					Cantidad = x.Cantidad,
+					PrecioUnitario = x.Precio,
+					ValorVenta = Redondear(x.Precio * x.Cantidad),
+					Igv = x.Igv,
+					PrecioConIgv = Redondear(x.Importe / (x.Cantidad <= 0 ? 1 : x.Cantidad)),
+					UnidadMedida = x.UnidadMedida,
+					PorcentajeIgv = 18,
+					CodigoAfectacionIgv = "10"
+				}).ToList()
+			};
+		}
+
+		private static FacturaRequestDto CrearFacturaRequest(
+			string serie,
+			string numero,
+			DateTime fechaEmision,
+			DateTime? fechaVencimiento,
+			string horaEmision,
+			string moneda,
+			VentaComprobanteDisponibleDto venta,
+			ComprobanteVentaPagoDto? pago)
+		{
+			return new FacturaRequestDto
+			{
+				Serie = serie,
+				Correlativo = numero,
+				FechaEmision = fechaEmision.ToString("yyyy-MM-dd"),
+				FechaVencimiento = fechaVencimiento?.ToString("yyyy-MM-dd"),
+				HoraEmision = horaEmision,
+				Moneda = moneda,
+				MontoEnLetras = MontoEnLetras.EnSoles(venta.Total),
+				Cliente = new FacturaClienteDto
+				{
+					TipoDocumento = MapearTipoDocumentoSunat(venta.Cliente.TipoDocumento, true),
+					NumeroDocumento = venta.Cliente.Documento,
+					Nombre = venta.Cliente.Nombre,
+					Direccion = string.IsNullOrWhiteSpace(venta.Cliente.Direccion) ? null : venta.Cliente.Direccion
+				},
+				Totales = new FacturaTotalesDto
+				{
+					ValorVenta = venta.Subtotal,
+					Igv = venta.Igv,
+					Total = venta.Total
+				},
+				Items = venta.Detalle.Select(x => new FacturaItemDto
+				{
+					Descripcion = x.ProductoServicio,
+					Cantidad = x.Cantidad,
+					PrecioUnitario = x.Precio,
+					ValorVenta = Redondear(x.Precio * x.Cantidad),
+					Igv = x.Igv,
+					PrecioConIgv = Redondear(x.Importe / (x.Cantidad <= 0 ? 1 : x.Cantidad)),
+					UnidadMedida = x.UnidadMedida,
+					PorcentajeIgv = 18,
+					CodigoAfectacionIgv = "10"
+				}).ToList(),
+				Pago = pago is null
+					? null
+					: new FacturaPagoDto
+					{
+						FormaPago = pago.FormaPago == "CREDITO" ? "Credito" : "Contado",
+						Cuotas = pago.Cuotas.Select(x => new FacturaCuotaDto
+						{
+							Monto = x.Monto,
+							FechaVencimiento = x.FechaVencimiento
+						}).ToList()
+					}
+			};
+		}
+
+		private static bool DocumentoValido(string tipoDocumento, string? numero)
+		{
+			var documento = (numero ?? string.Empty).Trim();
+			return tipoDocumento.ToUpperInvariant() switch
+			{
+				"DNI" => documento.Length == 8 && documento.All(char.IsDigit),
+				"RUC" => documento.Length == 11 && documento.All(char.IsDigit),
+				"CE" => documento.Length >= 6 && documento.Length <= 12,
+				_ => false
+			};
+		}
+
+		private static DateTime ParsearFechaObligatoria(string? fechaTexto, string mensaje)
+		{
+			if (!DateTime.TryParse(fechaTexto, CultureInfo.InvariantCulture, DateTimeStyles.None, out var fecha))
+			{
+				throw new InvalidOperationException(mensaje);
+			}
+
+			return fecha.Date;
+		}
+
+		private static decimal Redondear(decimal valor) =>
+			Math.Round(valor, 2, MidpointRounding.AwayFromZero);
+
+		private static decimal ObtenerIgvVenta(SqlDataReader dr)
+		{
+			var igv = dr["igv"];
+			if (igv == DBNull.Value)
+			{
+				return 18m;
+			}
+
+			var porcentaje = Convert.ToDecimal(igv);
+			return porcentaje <= 0 ? 18m : porcentaje;
+		}
+
+		private static decimal ObtenerPorcentajeIgv(VentaComprobanteDetalleDto item)
+		{
+			var baseAmount = Redondear(item.Cantidad * item.Precio);
+			if (baseAmount <= 0)
+			{
+				return 18m;
+			}
+
+			return Redondear((item.Igv / baseAmount) * 100m);
+		}
+
+		private static string MapearTipoDocumentoSunat(string tipoDocumento, bool esFactura)
+		{
+			if (esFactura)
+			{
+				return "6";
+			}
+
+			return (tipoDocumento ?? string.Empty).Trim().ToUpperInvariant() switch
+			{
+				"DNI" => "1",
+				"RUC" => "6",
+				"CE" => "4",
+				_ => "-"
+			};
+		}
+
+		private static string MapearTipoDocumentoUi(string? tipoDocumento)
+		{
+			return (tipoDocumento ?? string.Empty).Trim().ToUpperInvariant() switch
+			{
+				"RUC" => "RUC",
+				"DNI" => "DNI",
+				"CE" => "CE",
+				"PASAPORTE" => "PASAPORTE",
+				"6" => "RUC",
+				"1" => "DNI",
+				"4" => "CE",
+				_ => string.Empty
+			};
+		}
+
+		private static string MapearEstadoUi(string? operationType, string? transmissionStatus, string? sunatStatus)
+		{
+			if (string.Equals(operationType, "VOID", StringComparison.OrdinalIgnoreCase) &&
+				string.Equals(transmissionStatus, "SUCCESS", StringComparison.OrdinalIgnoreCase))
+			{
+				return "ANULADO";
+			}
+
+			return (sunatStatus ?? string.Empty).Trim().ToUpperInvariant() switch
+			{
+				"RECHAZADO" => "RECHAZADO",
+				_ => "EMITIDO"
+			};
+		}
+
+		private static string MapearEstadoSunatUi(string? estado)
+		{
+			return (estado ?? string.Empty).Trim().ToUpperInvariant() switch
+			{
+				"ACEPTADO" => "ACEPTADO",
+				"RECHAZADO" => "RECHAZADO",
+				"EXCEPCION" => "EXCEPCION",
+				"OBSERVADO" => "OBSERVADO",
+				"ENVIADO" => "ENVIADO",
+				"NO_ENVIADO" => "PENDIENTE",
+				_ => "PENDIENTE"
+			};
+		}
+
+		private static string MapearEstadoSunatPersistencia(FacturacionEnvioResultado envio)
+		{
+			var estado = string.IsNullOrWhiteSpace(envio.EstadoSunat)
+				? (envio.Exitoso ? "PENDIENTE" : "RECHAZADO")
+				: envio.EstadoSunat.Trim().ToUpperInvariant();
+
+			return estado switch
+			{
+				"NO_ENVIADO" => "NO_ENVIADO",
+				"PENDIENTE" => "PENDIENTE",
+				"ACEPTADO" => "ACEPTADO",
+				"RECHAZADO" => "RECHAZADO",
+				"EXCEPCION" => "EXCEPCION",
+				"OBSERVADO" => "EXCEPCION",
+				"ENVIADO" => "PENDIENTE",
+				"PENDING" => "PENDIENTE",
+				"SUCCESS" => "PENDIENTE",
+				"ERROR" => "EXCEPCION",
+				"FAILED" => "RECHAZADO",
+				_ => envio.Exitoso ? "PENDIENTE" : "EXCEPCION"
+			};
+		}
+
+		private static string NormalizarSunatStatusParaVoucher(FacturacionEnvioResultado envio)
+		{
+			var estado = MapearEstadoSunatPersistencia(envio)
+				.Replace(" ", string.Empty, StringComparison.Ordinal)
+				.Replace("-", string.Empty, StringComparison.Ordinal)
+				.Replace("_", string.Empty, StringComparison.Ordinal)
+				.Trim()
+				.ToUpperInvariant();
+
+			return estado switch
+			{
+				"NOENVIADO" => "NO_ENVIADO",
+				"PENDIENTE" => "PENDIENTE",
+				"ACEPTADO" => "ACEPTADO",
+				"RECHAZADO" => "RECHAZADO",
+				"EXCEPCION" => "EXCEPCION",
+				_ => envio.Exitoso ? "PENDIENTE" : "EXCEPCION"
+			};
+		}
+
+		private static bool EsRetryable(FacturacionEnvioResultado resultado) =>
+			resultado.StatusCode == StatusCodes.Status502BadGateway ||
+			resultado.StatusCode == StatusCodes.Status503ServiceUnavailable ||
+			resultado.StatusCode == StatusCodes.Status504GatewayTimeout;
+
+		private static List<string> SepararObservaciones(string? observaciones)
+		{
+			if (string.IsNullOrWhiteSpace(observaciones))
+			{
+				return new List<string>();
+			}
+
+			return observaciones
+				.Split(['#', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+				.Where(x => !string.IsNullOrWhiteSpace(x))
+				.Take(20)
+				.ToList();
+		}
+
+		private static (string? A4, string? A5, string? Ticket58, string? Ticket80) ExtraerUrlsPdf(object? respuestaApi)
+		{
+			if (respuestaApi is not System.Text.Json.JsonElement element || element.ValueKind != System.Text.Json.JsonValueKind.Object)
+			{
+				return (null, null, null, null);
+			}
+
+			if (!element.TryGetProperty("pdf", out var pdf) || pdf.ValueKind != System.Text.Json.JsonValueKind.Object)
+			{
+				return (null, null, null, null);
+			}
+
+			return (
+				pdf.TryGetProperty("A4", out var a4) ? a4.GetString() : null,
+				pdf.TryGetProperty("A5", out var a5) ? a5.GetString() : null,
+				pdf.TryGetProperty("58mm", out var p58) ? p58.GetString() : null,
+				pdf.TryGetProperty("80mm", out var p80) ? p80.GetString() : null
+			);
+		}
+	}
+}

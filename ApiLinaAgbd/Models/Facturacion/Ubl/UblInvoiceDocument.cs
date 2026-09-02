@@ -19,6 +19,10 @@ namespace ApiLinaAgbd.Models.Facturacion.Ubl
 		[JsonPropertyName("cbc:IssueDate")]
 		public UblNode IssueDate { get; set; } = UblNode.Value(string.Empty);
 
+		[JsonPropertyName("cbc:DueDate")]
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblNode? DueDate { get; set; }
+
 		[JsonPropertyName("cbc:IssueTime")]
 		public UblNode IssueTime { get; set; } = UblNode.Value(string.Empty);
 
@@ -43,8 +47,31 @@ namespace ApiLinaAgbd.Models.Facturacion.Ubl
 		[JsonPropertyName("cac:LegalMonetaryTotal")]
 		public UblLegalMonetaryTotal LegalMonetaryTotal { get; set; } = new();
 
+		[JsonPropertyName("cac:PaymentTerms")]
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public List<UblPaymentTerms>? PaymentTerms { get; set; }
+
 		[JsonPropertyName("cac:InvoiceLine")]
 		public List<UblInvoiceLine> InvoiceLine { get; set; } = new();
+	}
+
+	public class UblPaymentTerms
+	{
+		[JsonPropertyName("cbc:ID")]
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblNode? Id { get; set; }
+
+		[JsonPropertyName("cbc:PaymentMeansID")]
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblNode? PaymentMeansId { get; set; }
+
+		[JsonPropertyName("cbc:Amount")]
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblNode? Amount { get; set; }
+
+		[JsonPropertyName("cbc:PaymentDueDate")]
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblNode? PaymentDueDate { get; set; }
 	}
 
 	public class UblAccountingParty

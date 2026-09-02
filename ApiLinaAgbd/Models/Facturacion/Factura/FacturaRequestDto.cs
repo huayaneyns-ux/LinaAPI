@@ -13,6 +13,8 @@ namespace ApiLinaAgbd.Models.Facturacion.Factura
 		[Required]
 		public string FechaEmision { get; set; } = string.Empty;
 
+		public string? FechaVencimiento { get; set; }
+
 		public string? HoraEmision { get; set; }
 
 		public string Moneda { get; set; } = "PEN";
@@ -31,6 +33,8 @@ namespace ApiLinaAgbd.Models.Facturacion.Factura
 		[Required]
 		[MinLength(1)]
 		public List<FacturaItemDto> Items { get; set; } = new();
+
+		public FacturaPagoDto? Pago { get; set; }
 	}
 
 	public class FacturaClienteDto
@@ -77,5 +81,19 @@ namespace ApiLinaAgbd.Models.Facturacion.Factura
 		public decimal PorcentajeIgv { get; set; } = 18;
 
 		public string CodigoAfectacionIgv { get; set; } = "10";
+	}
+
+	public class FacturaPagoDto
+	{
+		public string FormaPago { get; set; } = "Contado";
+
+		public List<FacturaCuotaDto> Cuotas { get; set; } = new();
+	}
+
+	public class FacturaCuotaDto
+	{
+		public decimal Monto { get; set; }
+
+		public string FechaVencimiento { get; set; } = string.Empty;
 	}
 }

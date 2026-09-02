@@ -52,6 +52,7 @@ builder.Services.AddHttpClient<FacturacionSunatService>((sp, client) =>
 
 builder.Services.AddScoped<BoletaUblBuilder>();
 builder.Services.AddScoped<BoletaService>();
+builder.Services.AddScoped<ComprobanteVentasService>();
 builder.Services.AddScoped<FacturaUblBuilder>();
 builder.Services.AddScoped<FacturaService>();
 builder.Services.AddScoped<NotaDebitoUblBuilder>();
