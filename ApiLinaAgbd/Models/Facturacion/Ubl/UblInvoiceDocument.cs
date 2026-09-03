@@ -51,8 +51,28 @@ namespace ApiLinaAgbd.Models.Facturacion.Ubl
 		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
 		public List<UblPaymentTerms>? PaymentTerms { get; set; }
 
+		[JsonPropertyName("cac:DeliveryTerms")]
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblDeliveryTerms? DeliveryTerms { get; set; }
+
 		[JsonPropertyName("cac:InvoiceLine")]
 		public List<UblInvoiceLine> InvoiceLine { get; set; } = new();
+	}
+
+	public class UblDeliveryTerms
+	{
+		[JsonPropertyName("cac:DeliveryLocation")]
+		public UblDeliveryLocation DeliveryLocation { get; set; } = new();
+	}
+
+	public class UblDeliveryLocation
+	{
+		[JsonPropertyName("cbc:LocationTypeCode")]
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblNode? LocationTypeCode { get; set; }
+
+		[JsonPropertyName("cac:Address")]
+		public UblRegistrationAddress Address { get; set; } = new();
 	}
 
 	public class UblPaymentTerms
@@ -117,6 +137,22 @@ namespace ApiLinaAgbd.Models.Facturacion.Ubl
 
 	public class UblRegistrationAddress
 	{
+		[JsonPropertyName("cbc:ID")]
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblNode? Id { get; set; }
+
+		[JsonPropertyName("cbc:CityName")]
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblNode? CityName { get; set; }
+
+		[JsonPropertyName("cbc:CountrySubentity")]
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblNode? CountrySubentity { get; set; }
+
+		[JsonPropertyName("cbc:District")]
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblNode? District { get; set; }
+
 		[JsonPropertyName("cbc:AddressTypeCode")]
 		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
 		public UblNode? AddressTypeCode { get; set; }
@@ -182,10 +218,12 @@ namespace ApiLinaAgbd.Models.Facturacion.Ubl
 	public class UblLegalMonetaryTotal
 	{
 		[JsonPropertyName("cbc:LineExtensionAmount")]
-		public UblNode LineExtensionAmount { get; set; } = new();
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblNode? LineExtensionAmount { get; set; }
 
 		[JsonPropertyName("cbc:TaxInclusiveAmount")]
-		public UblNode TaxInclusiveAmount { get; set; } = new();
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblNode? TaxInclusiveAmount { get; set; }
 
 		[JsonPropertyName("cbc:PayableAmount")]
 		public UblNode PayableAmount { get; set; } = new();
@@ -234,6 +272,16 @@ namespace ApiLinaAgbd.Models.Facturacion.Ubl
 	{
 		[JsonPropertyName("cbc:Description")]
 		public UblNode Description { get; set; } = new();
+
+		[JsonPropertyName("cac:SellersItemIdentification")]
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblSellersItemIdentification? SellersItemIdentification { get; set; }
+	}
+
+	public class UblSellersItemIdentification
+	{
+		[JsonPropertyName("cbc:ID")]
+		public UblNode Id { get; set; } = new();
 	}
 
 	public class UblPrice

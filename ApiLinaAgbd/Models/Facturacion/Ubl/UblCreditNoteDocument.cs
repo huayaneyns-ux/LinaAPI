@@ -2,10 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace ApiLinaAgbd.Models.Facturacion.Ubl
 {
-	/// <summary>
-	/// Cuerpo UBL Debit Note (tipo 08).
-	/// </summary>
-	public class UblDebitNoteDocument
+	public class UblCreditNoteDocument
 	{
 		[JsonPropertyName("cbc:UBLVersionID")]
 		public UblNode UblVersionId { get; set; } = UblNode.Value("2.1");
@@ -44,54 +41,20 @@ namespace ApiLinaAgbd.Models.Facturacion.Ubl
 		[JsonPropertyName("cac:TaxTotal")]
 		public UblTaxTotal TaxTotal { get; set; } = new();
 
-		[JsonPropertyName("cac:RequestedMonetaryTotal")]
-		public UblRequestedMonetaryTotal RequestedMonetaryTotal { get; set; } = new();
+		[JsonPropertyName("cac:LegalMonetaryTotal")]
+		public UblLegalMonetaryTotal LegalMonetaryTotal { get; set; } = new();
 
-		[JsonPropertyName("cac:DebitNoteLine")]
-		public List<UblDebitNoteLine> DebitNoteLine { get; set; } = new();
+		[JsonPropertyName("cac:CreditNoteLine")]
+		public List<UblCreditNoteLine> CreditNoteLine { get; set; } = new();
 	}
 
-	public class UblDiscrepancyResponse
-	{
-		[JsonPropertyName("cbc:ReferenceID")]
-		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-		public UblNode? ReferenceId { get; set; }
-
-		[JsonPropertyName("cbc:ResponseCode")]
-		public UblNode ResponseCode { get; set; } = new();
-
-		[JsonPropertyName("cbc:Description")]
-		public UblNode Description { get; set; } = new();
-	}
-
-	public class UblBillingReference
-	{
-		[JsonPropertyName("cac:InvoiceDocumentReference")]
-		public UblInvoiceDocumentReference InvoiceDocumentReference { get; set; } = new();
-	}
-
-	public class UblInvoiceDocumentReference
+	public class UblCreditNoteLine
 	{
 		[JsonPropertyName("cbc:ID")]
 		public UblNode Id { get; set; } = new();
 
-		[JsonPropertyName("cbc:DocumentTypeCode")]
-		public UblNode DocumentTypeCode { get; set; } = new();
-	}
-
-	public class UblRequestedMonetaryTotal
-	{
-		[JsonPropertyName("cbc:PayableAmount")]
-		public UblNode PayableAmount { get; set; } = new();
-	}
-
-	public class UblDebitNoteLine
-	{
-		[JsonPropertyName("cbc:ID")]
-		public UblNode Id { get; set; } = new();
-
-		[JsonPropertyName("cbc:DebitedQuantity")]
-		public UblNode DebitedQuantity { get; set; } = new();
+		[JsonPropertyName("cbc:CreditedQuantity")]
+		public UblNode CreditedQuantity { get; set; } = new();
 
 		[JsonPropertyName("cbc:LineExtensionAmount")]
 		public UblNode LineExtensionAmount { get; set; } = new();

@@ -1,7 +1,11 @@
-using ApiLinaAgbd.Models.Facturacion.Boleta;
+
 using ApiLinaAgbd.Models.Facturacion.ComprobantesVenta;
-using ApiLinaAgbd.Models.Facturacion.Factura;
+using ApiLinaAgbd.Models.Facturacion.Documentos;
+
+using ApiLinaAgbd.Models.Facturacion.LiquidacionCompra;
+using ApiLinaAgbd.Models.Facturacion.NotaCredito;
 using ApiLinaAgbd.Models.Facturacion.NotaDebito;
+
 using ApiLinaAgbd.Services.Facturacion;
 using Microsoft.AspNetCore.Mvc;
 
@@ -11,20 +15,24 @@ namespace ApiLinaAgbd.Controllers.Facturacion
 	[Route("api/facturacion")]
 	public class FacturacionController : ControllerBase
 	{
-		private readonly BoletaService _boletaService;
 		private readonly ComprobanteVentasService _comprobanteVentasService;
-		private readonly FacturaService _facturaService;
+		private readonly DocumentoFacturacionService _documentoFacturacionService;
+
+		private readonly LiquidacionCompraService _liquidacionCompraService;
+		private readonly NotaCreditoService _notaCreditoService;
 		private readonly NotaDebitoService _notaDebitoService;
 
 		public FacturacionController(
-			BoletaService boletaService,
 			ComprobanteVentasService comprobanteVentasService,
-			FacturaService facturaService,
+			DocumentoFacturacionService documentoFacturacionService,
+			LiquidacionCompraService liquidacionCompraService,
+			NotaCreditoService notaCreditoService,
 			NotaDebitoService notaDebitoService)
 		{
-			_boletaService = boletaService;
 			_comprobanteVentasService = comprobanteVentasService;
-			_facturaService = facturaService;
+			_documentoFacturacionService = documentoFacturacionService;
+			_liquidacionCompraService = liquidacionCompraService;
+			_notaCreditoService = notaCreditoService;
 			_notaDebitoService = notaDebitoService;
 		}
 
@@ -42,12 +50,33 @@ namespace ApiLinaAgbd.Controllers.Facturacion
 			return Ok(comprobantes);
 		}
 
+		[HttpGet("comprobantes")]
+		public async Task<IActionResult> ListarTodosLosComprobantes()
+		{
+			var comprobantes = await _documentoFacturacionService.ListarTodosAsync();
+			return Ok(comprobantes);
+		}
+
 		[HttpGet("comprobantes/ventas/{id}")]
 		public async Task<IActionResult> ObtenerComprobanteVenta(string id)
 		{
 			try
 			{
 				var comprobante = await _comprobanteVentasService.ObtenerComprobantePorIdAsync(id);
+				return Ok(comprobante);
+			}
+			catch (InvalidOperationException ex)
+			{
+				return NotFound(new { mensaje = ex.Message });
+			}
+		}
+
+		[HttpGet("comprobantes/{id}")]
+		public async Task<IActionResult> ObtenerDocumento(string id)
+		{
+			try
+			{
+				var comprobante = await _documentoFacturacionService.ObtenerDetalleAsync(id);
 				return Ok(comprobante);
 			}
 			catch (InvalidOperationException ex)
@@ -75,7 +104,21 @@ namespace ApiLinaAgbd.Controllers.Facturacion
 		{
 			try
 			{
-				var comprobante = await _comprobanteVentasService.SincronizarEstadoSunatAsync(id);
+				var comprobante = await _documentoFacturacionService.SincronizarEstadoSunatAsync(id);
+				return Ok(comprobante);
+			}
+			catch (InvalidOperationException ex)
+			{
+				return BadRequest(new { mensaje = ex.Message });
+			}
+		}
+
+		[HttpPost("comprobantes/{id}/sincronizar-sunat")]
+		public async Task<IActionResult> SincronizarDocumentoSunat(string id)
+		{
+			try
+			{
+				DocumentoFacturacionDto comprobante = await _documentoFacturacionService.SincronizarEstadoSunatAsync(id);
 				return Ok(comprobante);
 			}
 			catch (InvalidOperationException ex)
@@ -98,12 +141,26 @@ namespace ApiLinaAgbd.Controllers.Facturacion
 			}
 		}
 
+		[HttpGet("comprobantes/{id}/pdf")]
+		public async Task<IActionResult> DescargarPdfDocumento(string id, [FromQuery] string format = "A4")
+		{
+			try
+			{
+				var pdf = await _documentoFacturacionService.DescargarPdfAsync(id, format);
+				return File(pdf.Content, pdf.ContentType, pdf.FileName);
+			}
+			catch (InvalidOperationException ex)
+			{
+				return BadRequest(new { mensaje = ex.Message });
+			}
+		}
+
 		[HttpPost("comprobantes/ventas/{id}/anular")]
 		public async Task<IActionResult> AnularComprobanteVenta(string id, [FromBody] ComprobanteVentaAnularRequestDto request)
 		{
 			try
 			{
-				var comprobante = await _comprobanteVentasService.AnularAsync(id, request.Reason);
+				var comprobante = await _documentoFacturacionService.AnularAsync(id, request.Reason);
 				return Ok(comprobante);
 			}
 			catch (InvalidOperationException ex)
@@ -112,40 +169,74 @@ namespace ApiLinaAgbd.Controllers.Facturacion
 			}
 		}
 
-		[HttpPost("boleta")]
-		public async Task<IActionResult> EnviarBoleta([FromBody] BoletaRequestDto request)
+		[HttpPost("comprobantes/{id}/anular")]
+		public async Task<IActionResult> AnularDocumento(string id, [FromBody] ComprobanteVentaAnularRequestDto request)
 		{
-			var resultado = await _boletaService.Enviar(request);
-			return ResponderEnvio(resultado);
-		}
-
-		[HttpPost("factura")]
-		public async Task<IActionResult> EnviarFactura([FromBody] FacturaRequestDto request)
-		{
-			var resultado = await _facturaService.Enviar(request);
-			return ResponderEnvio(resultado);
-		}
-
-		[HttpPost("nota-debito")]
-		public async Task<IActionResult> EnviarNotaDebito([FromBody] NotaDebitoRequestDto request)
-		{
-			var resultado = await _notaDebitoService.Enviar(request);
-			return ResponderEnvio(resultado);
-		}
-
-		private IActionResult ResponderEnvio(Models.Facturacion.FacturacionEnvioResultado resultado)
-		{
-			if (resultado.StatusCode >= 200 && resultado.StatusCode < 300)
+			try
 			{
+				DocumentoFacturacionDto comprobante = await _documentoFacturacionService.AnularAsync(id, request.Reason);
+				return Ok(comprobante);
+			}
+			catch (InvalidOperationException ex)
+			{
+				return BadRequest(new { mensaje = ex.Message });
+			}
+		}
+
+		[HttpGet("comprobantes/liquidaciones/compras-disponibles")]
+		public async Task<IActionResult> ListarComprasDisponiblesParaLiquidacion()
+		{
+			var compras = await _liquidacionCompraService.ListarComprasDisponiblesAsync();
+			return Ok(compras);
+		}
+
+		[HttpPost("comprobantes/liquidaciones")]
+		public async Task<IActionResult> EmitirLiquidacionCompra([FromBody] LiquidacionCompraEmitirRequestDto request)
+		{
+			try
+			{
+				var resultado = await _liquidacionCompraService.EmitirAsync(request);
 				return Ok(resultado);
 			}
-
-			if (resultado.StatusCode > 0)
+			catch (InvalidOperationException ex)
 			{
-				return StatusCode(resultado.StatusCode, resultado);
+				return BadRequest(new { mensaje = ex.Message });
 			}
+		}
 
-			return StatusCode(StatusCodes.Status502BadGateway, resultado);
+		[HttpGet("comprobantes/notas/bases")]
+		public async Task<IActionResult> ListarComprobantesBaseParaNotas()
+		{
+			var comprobantes = await _notaCreditoService.ListarComprobantesBaseAsync();
+			return Ok(comprobantes);
+		}
+
+		[HttpPost("comprobantes/notas/credito")]
+		public async Task<IActionResult> EmitirNotaCredito([FromBody] NotaCreditoEmitirRequestDto request)
+		{
+			try
+			{
+				var resultado = await _notaCreditoService.EmitirAsync(request);
+				return Ok(resultado);
+			}
+			catch (InvalidOperationException ex)
+			{
+				return BadRequest(new { mensaje = ex.Message });
+			}
+		}
+
+		[HttpPost("comprobantes/notas/debito")]
+		public async Task<IActionResult> EmitirNotaDebito([FromBody] NotaDebitoEmitirRequestDto request)
+		{
+			try
+			{
+				var resultado = await _notaDebitoService.EmitirAsync(request);
+				return Ok(resultado);
+			}
+			catch (InvalidOperationException ex)
+			{
+				return BadRequest(new { mensaje = ex.Message });
+			}
 		}
 	}
 }

@@ -1,33 +1,44 @@
 using ApiLinaAgbd.Models.Facturacion;
+using ApiLinaAgbd.Models.Facturacion.Notas;
 using ApiLinaAgbd.Models.Facturacion.Ubl;
 using Microsoft.Extensions.Options;
 using static ApiLinaAgbd.Services.Facturacion.MontoEnLetras;
 
 namespace ApiLinaAgbd.Services.Facturacion
 {
-	public class NotaDebitoUblBuilder
+	public class NotaCreditoUblBuilder
 	{
-		public const string TipoDocumentoNotaDebito = "08";
+		public const string TipoDocumentoNotaCredito = "07";
 
 		private readonly EmisorSettings _emisor;
 
-		public NotaDebitoUblBuilder(IOptions<FacturacionSettings> options)
+		public NotaCreditoUblBuilder(IOptions<FacturacionSettings> options)
 		{
 			_emisor = options.Value.Emisor ?? new EmisorSettings();
 		}
 
-		public UblDebitNoteDocument Build(UblAdjustmentPayloadDto request)
+		public UblCreditNoteDocument Build(
+			UblAdjustmentPayloadDto request,
+			NotaComprobanteBaseDisponibleDto referencia)
 		{
 			var moneda = string.IsNullOrWhiteSpace(request.Moneda) ? "PEN" : request.Moneda;
 			var horaEmision = string.IsNullOrWhiteSpace(request.HoraEmision)
 				? DateTime.Now.ToString("HH:mm:ss")
 				: request.HoraEmision;
-			var montoEnLetras = EnSoles(request.Totales.Total);
+			var items = request.Items;
+			var total = request.Totales.Total > 0
+				? request.Totales.Total
+				: items.Sum(x => x.Importe);
+			var valorVenta = request.Totales.ValorVenta > 0
+				? request.Totales.ValorVenta
+				: items.Sum(x => x.ValorVenta);
+			var igv = request.Totales.Igv > 0
+				? request.Totales.Igv
+				: items.Sum(x => x.Igv);
+			var montoEnLetras = EnSoles(total);
 
-			return new UblDebitNoteDocument
+			return new UblCreditNoteDocument
 			{
-				UblVersionId = UblNode.Value("2.1"),
-				CustomizationId = UblNode.Value("2.0"),
 				Id = UblNode.Value($"{request.Serie}-{request.Correlativo}"),
 				IssueDate = UblNode.Value(request.FechaEmision),
 				IssueTime = UblNode.Value(horaEmision),
@@ -45,18 +56,18 @@ namespace ApiLinaAgbd.Services.Facturacion
 				{
 					InvoiceDocumentReference = new UblInvoiceDocumentReference
 					{
-						Id = UblNode.Value(request.DocumentoReferencia.Id),
-						DocumentTypeCode = UblNode.Value(request.DocumentoReferencia.TipoDocumento)
+						Id = UblNode.Value($"{referencia.Serie}-{referencia.Numero}"),
+						DocumentTypeCode = UblNode.Value(referencia.SunatTypeCode)
 					}
 				},
 				AccountingSupplierParty = BuildEmisor(),
-				AccountingCustomerParty = BuildCliente(request.Cliente),
-				TaxTotal = BuildTaxTotal(request.Totales.ValorVenta, request.Totales.Igv, moneda),
-				RequestedMonetaryTotal = new UblRequestedMonetaryTotal
+				AccountingCustomerParty = BuildCliente(referencia),
+				TaxTotal = BuildTaxTotal(valorVenta, igv, moneda),
+				LegalMonetaryTotal = new UblLegalMonetaryTotal
 				{
-					PayableAmount = UblNode.Amount(request.Totales.Total, moneda)
+					PayableAmount = UblNode.Amount(total, moneda)
 				},
-				DebitNoteLine = BuildLineas(request.Items, moneda)
+				CreditNoteLine = BuildLineas(items, moneda)
 			};
 		}
 
@@ -70,10 +81,12 @@ namespace ApiLinaAgbd.Services.Facturacion
 					{
 						Id = UblNode.Attr(_emisor.Ruc, "schemeID", _emisor.TipoDocumento)
 					},
-					PartyName = new UblPartyName
-					{
-						Name = UblNode.Value(_emisor.NombreComercial)
-					},
+					PartyName = string.IsNullOrWhiteSpace(_emisor.NombreComercial)
+						? null
+						: new UblPartyName
+						{
+							Name = UblNode.Value(_emisor.NombreComercial)
+						},
 					PartyLegalEntity = new UblPartyLegalEntity
 					{
 						RegistrationName = UblNode.Value(_emisor.RazonSocial),
@@ -94,34 +107,43 @@ namespace ApiLinaAgbd.Services.Facturacion
 			};
 		}
 
-		private static UblAccountingParty BuildCliente(UblPartyPayloadDto cliente)
+		private static UblAccountingParty BuildCliente(NotaComprobanteBaseDisponibleDto referencia)
 		{
+			var direccion = string.IsNullOrWhiteSpace(referencia.ClienteDireccion)
+				? null
+				: new UblRegistrationAddress
+				{
+					AddressLine = new UblAddressLine
+					{
+						Line = UblNode.Value(referencia.ClienteDireccion)
+					}
+				};
+
 			return new UblAccountingParty
 			{
 				Party = new UblParty
 				{
 					PartyIdentification = new UblPartyIdentification
 					{
-						Id = UblNode.Attr(cliente.NumeroDocumento, "schemeID", cliente.TipoDocumento)
+						Id = UblNode.Attr(
+							referencia.ClienteDocumento,
+							"schemeID",
+							FacturacionVoucherHelper.MapearTipoDocumentoSunat(referencia.ClienteTipoDocumento, referencia.SunatTypeCode == "01"))
 					},
 					PartyLegalEntity = new UblPartyLegalEntity
 					{
-						RegistrationName = UblNode.Value(cliente.Nombre)
+						RegistrationName = UblNode.Value(referencia.ClienteNombre),
+						RegistrationAddress = direccion
 					}
 				}
 			};
 		}
 
-		private static UblTaxTotal BuildTaxTotal(
-			decimal baseImponible,
-			decimal igv,
-			string moneda,
-			decimal? porcentaje = null,
-			string? codigoAfectacion = null)
+		private static UblTaxTotal BuildTaxTotal(decimal baseImponible, decimal igv, string moneda)
 		{
 			return new UblTaxTotal
 			{
-				TaxAmount = UblNode.Amount(igv, moneda),
+				TaxAmount = UblNode.Amount(baseImponible <= 0 ? 0 : igv, moneda),
 				TaxSubtotal =
 				[
 					new UblTaxSubtotal
@@ -130,10 +152,8 @@ namespace ApiLinaAgbd.Services.Facturacion
 						TaxAmount = UblNode.Amount(igv, moneda),
 						TaxCategory = new UblTaxCategory
 						{
-							Percent = porcentaje.HasValue ? UblNode.Value(porcentaje.Value) : null,
-							TaxExemptionReasonCode = string.IsNullOrWhiteSpace(codigoAfectacion)
-								? null
-								: UblNode.Value(codigoAfectacion),
+							Percent = UblNode.Value(18),
+							TaxExemptionReasonCode = UblNode.Value("10"),
 							TaxScheme = new UblTaxScheme()
 						}
 					}
@@ -141,19 +161,17 @@ namespace ApiLinaAgbd.Services.Facturacion
 			};
 		}
 
-		private static List<UblDebitNoteLine> BuildLineas(List<UblItemPayloadDto> items, string moneda)
+		private static List<UblCreditNoteLine> BuildLineas(List<UblItemPayloadDto> items, string moneda)
 		{
-			var lineas = new List<UblDebitNoteLine>();
+			var lineas = new List<UblCreditNoteLine>();
 
 			for (var i = 0; i < items.Count; i++)
 			{
 				var item = items[i];
-				var unidad = string.IsNullOrWhiteSpace(item.UnidadMedida) ? "NIU" : item.UnidadMedida;
-
-				lineas.Add(new UblDebitNoteLine
+				lineas.Add(new UblCreditNoteLine
 				{
 					Id = UblNode.Value(i + 1),
-					DebitedQuantity = UblNode.Attr(item.Cantidad, "unitCode", unidad),
+					CreditedQuantity = UblNode.Attr(item.Cantidad, "unitCode", string.IsNullOrWhiteSpace(item.UnidadMedida) ? "NIU" : item.UnidadMedida),
 					LineExtensionAmount = UblNode.Amount(item.ValorVenta, moneda),
 					PricingReference = new UblPricingReference
 					{
@@ -163,12 +181,24 @@ namespace ApiLinaAgbd.Services.Facturacion
 							PriceTypeCode = UblNode.Value("01")
 						}
 					},
-					TaxTotal = BuildTaxTotal(
-						item.ValorVenta,
-						item.Igv,
-						moneda,
-						item.PorcentajeIgv,
-						item.CodigoAfectacionIgv),
+					TaxTotal = new UblTaxTotal
+					{
+						TaxAmount = UblNode.Amount(item.Igv, moneda),
+						TaxSubtotal =
+						[
+							new UblTaxSubtotal
+							{
+								TaxableAmount = UblNode.Amount(item.ValorVenta, moneda),
+								TaxAmount = UblNode.Amount(item.Igv, moneda),
+								TaxCategory = new UblTaxCategory
+								{
+									Percent = UblNode.Value(item.PorcentajeIgv),
+									TaxExemptionReasonCode = UblNode.Value(item.CodigoAfectacionIgv),
+									TaxScheme = new UblTaxScheme()
+								}
+							}
+						]
+					},
 					Item = new UblItem
 					{
 						Description = UblNode.Value(item.Descripcion)

@@ -3,9 +3,8 @@ using System.Data.SqlClient;
 using System.Globalization;
 using ApiLinaAgbd.Data;
 using ApiLinaAgbd.Models.Facturacion;
-using ApiLinaAgbd.Models.Facturacion.Boleta;
 using ApiLinaAgbd.Models.Facturacion.ComprobantesVenta;
-using ApiLinaAgbd.Models.Facturacion.Factura;
+using ApiLinaAgbd.Models.Facturacion.Ubl;
 
 namespace ApiLinaAgbd.Services.Facturacion
 {
@@ -43,7 +42,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			using var con = _conexion.ObtenerConexion();
 			await con.OpenAsync();
 
-			const string sql = """
+			const string sql = @"
 				SELECT
 					v.id AS VentaId,
 					v.fecha,
@@ -67,7 +66,14 @@ namespace ApiLinaAgbd.Services.Facturacion
 				FROM dbo.venta v
 				INNER JOIN dbo.usuario u ON u.id = v.id_cliente
 				LEFT JOIN dbo.documento d ON d.id = u.id_documento
-				LEFT JOIN dbo.direccion dir ON dir.id_usuario = u.id
+				OUTER APPLY (
+					SELECT TOP 1 dir.nombre_direccion
+					FROM dbo.UsuarioDireccion ud
+					INNER JOIN dbo.direccion dir ON dir.id = ud.id_direccion
+					WHERE ud.id_usuario = u.id
+					  AND ud.estado = 1
+					ORDER BY ud.es_principal DESC, ud.fecha_registro DESC, ud.id DESC
+				) dir
 				INNER JOIN dbo.detalleventa dv ON dv.id_venta = v.id
 				INNER JOIN dbo.producto p ON p.id = dv.id_producto
 				LEFT JOIN dbo.unidadmedida um ON um.id = p.id_unidad_medida
@@ -76,9 +82,9 @@ namespace ApiLinaAgbd.Services.Facturacion
 					FROM dbo.Voucher vx
 					WHERE vx.VentaId = v.id
 					  AND vx.SunatTypeCode IN ('01', '03')
-				) AND dir.seleccionado = 1
-				ORDER BY v.id DESC, dv.id ASC;
-				""";
+					  AND ISNULL(vx.SunatStatus, 'NO_ENVIADO') IN ('NO_ENVIADO', 'PENDIENTE', 'ACEPTADO')
+				)
+				ORDER BY v.id DESC, dv.id ASC;";
 
 			using var cmd = new SqlCommand(sql, con) { CommandType = CommandType.Text };
 			using var dr = await cmd.ExecuteReaderAsync();
@@ -439,7 +445,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			}
 
 			var venta = await ObtenerVentaAsync(request.VentaOrigenId);
-			AplicarClientePreferido(venta, request.Cliente);
+			var clienteFiscal = ResolverClienteFiscal(venta, tipo, request.ReceptorSource, request.Cliente);
 
 			var fechaEmision = ParsearFechaObligatoria(request.FechaEmision, "La fecha de emisión es obligatoria.");
 			var fechaVencimiento = string.IsNullOrWhiteSpace(request.FechaVencimiento)
@@ -448,7 +454,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			var moneda = (request.Moneda ?? "PEN").Trim().ToUpperInvariant();
 			var pagoNormalizado = NormalizarPago(request.Pago);
 
-			ValidarSolicitud(tipo, venta, fechaEmision, fechaVencimiento, moneda, pagoNormalizado);
+			ValidarSolicitud(tipo, venta, clienteFiscal, fechaEmision, fechaVencimiento, moneda, pagoNormalizado, request.ReceptorSource);
 
 			var serie = tipo == "FACTURA" ? SerieFactura : SerieBoleta;
 			var tipoComprobanteSunat = tipo == "FACTURA" ? TipoFacturaSunat : TipoBoletaSunat;
@@ -465,20 +471,31 @@ namespace ApiLinaAgbd.Services.Facturacion
 				numero = await GenerarNumeroAleatorioDisponibleAsync(con, tx, tipoComprobanteSunat, serie);
 
 				await InsertarVoucherPendienteAsync(con, tx, voucherId, request.VentaOrigenId, tipoComprobanteSunat, serie, numero, fechaEmision, fechaVencimiento, moneda, venta, pagoNormalizado);
-				await InsertarVoucherPartyAsync(con, tx, voucherId, venta.Cliente);
+				if (DebePersistirClienteSnapshot(tipo, request.ReceptorSource, clienteFiscal))
+				{
+					await InsertarVoucherPartyAsync(con, tx, voucherId, clienteFiscal);
+				}
 				await InsertarVoucherItemsAsync(con, tx, voucherId, venta.Detalle);
 				await InsertarVoucherObservationsAsync(con, tx, voucherId, request.Observaciones);
 				await InsertarVoucherInstallmentsAsync(con, tx, voucherId, pagoNormalizado);
 				tx.Commit();
 			}
 
-			var boletaRequest = tipo == "BOLETA" ? CrearBoletaRequest(serie, numero, fechaEmision, horaEmision, moneda, venta) : null;
-			var facturaRequest = tipo == "FACTURA" ? CrearFacturaRequest(serie, numero, fechaEmision, fechaVencimiento, horaEmision, moneda, venta, pagoNormalizado) : null;
+			var boletaRequest = tipo == "BOLETA" ? CrearBoletaRequest(serie, numero, fechaEmision, horaEmision, moneda, venta, clienteFiscal) : null;
+			var facturaRequest = tipo == "FACTURA" ? CrearFacturaRequest(serie, numero, fechaEmision, fechaVencimiento, horaEmision, moneda, venta, clienteFiscal, pagoNormalizado) : null;
 			var documentBody = tipo == "BOLETA"
 				? _boletaBuilder.Build(boletaRequest!)
 				: _facturaBuilder.Build(facturaRequest!);
 			var fileName = $"{_settings.Emisor.Ruc}-{tipoComprobanteSunat}-{serie}-{numero}";
 			var envio = await _facturacionSunatService.EnviarDocumento(fileName, documentBody);
+
+			if (!FacturacionVoucherHelper.FueRecibidoPorApi(envio))
+			{
+				using var conLimpieza = _conexion.ObtenerConexion();
+				await conLimpieza.OpenAsync();
+				await FacturacionVoucherHelper.EliminarVoucherAsync(conLimpieza, voucherId);
+				throw new InvalidOperationException(envio.DetalleError ?? envio.MensajeSunat ?? envio.Mensaje);
+			}
 
 			using (var con = _conexion.ObtenerConexion())
 			{
@@ -521,7 +538,8 @@ namespace ApiLinaAgbd.Services.Facturacion
 					SunatTypeCode
 				FROM dbo.Voucher
 				WHERE VentaId = @VentaId
-				  AND SunatTypeCode IN ('01', '03');
+				  AND SunatTypeCode IN ('01', '03')
+				  AND ISNULL(SunatStatus, 'NO_ENVIADO') IN ('NO_ENVIADO', 'PENDIENTE', 'ACEPTADO');
 				""";
 
 			using var cmd = new SqlCommand(sql, con, tx);
@@ -898,102 +916,74 @@ namespace ApiLinaAgbd.Services.Facturacion
 		}
 
 		private async Task RegistrarTransmisionAsync(SqlConnection con, string voucherId, string operationType, FacturacionEnvioResultado resultado)
+			=> await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, Guid.Parse(voucherId), operationType, resultado);
+
+		private static ComprobanteVentaClienteDto ResolverClienteFiscal(
+			VentaComprobanteDisponibleDto venta,
+			string tipo,
+			string? receptorSource,
+			ComprobanteVentaClienteDto? clienteRequest)
 		{
-			var nextAttempt = await ObtenerSiguienteIntentoAsync(con, voucherId, operationType);
+			var source = (receptorSource ?? "SALE_CUSTOMER").Trim().ToUpperInvariant();
+			var clienteCustomInformado = TieneDatosCliente(clienteRequest);
 
-			const string sql = """
-				INSERT INTO dbo.SunatTransmission
-				(
-					Id,
-					VoucherId,
-					AttemptNumber,
-					OperationType,
-					TransmissionStatus,
-					HttpStatus,
-					SunatStatus,
-					SunatDocumentId,
-					ErrorMessage,
-					IsRetryable,
-					RespondedAt
-				)
-				VALUES
-				(
-					@Id,
-					@VoucherId,
-					@AttemptNumber,
-					@OperationType,
-					@TransmissionStatus,
-					@HttpStatus,
-					@SunatStatus,
-					@SunatDocumentId,
-					@ErrorMessage,
-					@IsRetryable,
-					@RespondedAt
-				);
-				""";
+			if (source == "SALE_CUSTOMER" && clienteCustomInformado)
+			{
+				source = "CUSTOM";
+			}
 
-			using var cmd = new SqlCommand(sql, con);
-			cmd.Parameters.AddWithValue("@Id", Guid.NewGuid());
-			cmd.Parameters.AddWithValue("@VoucherId", Guid.Parse(voucherId));
-			cmd.Parameters.AddWithValue("@AttemptNumber", nextAttempt);
-			cmd.Parameters.AddWithValue("@OperationType", operationType);
-			cmd.Parameters.AddWithValue("@TransmissionStatus", resultado.Exitoso ? "SUCCESS" : "ERROR");
-			cmd.Parameters.AddWithValue("@HttpStatus", resultado.StatusCode > 0 ? resultado.StatusCode : DBNull.Value);
-			cmd.Parameters.Add("@SunatStatus", SqlDbType.VarChar, 30).Value = NormalizarSunatStatusParaVoucher(resultado);
-			cmd.Parameters.AddWithValue("@SunatDocumentId", (object?)resultado.DocumentId ?? DBNull.Value);
-			cmd.Parameters.AddWithValue("@ErrorMessage", (object?)(resultado.DetalleError ?? resultado.MensajeSunat ?? resultado.Mensaje) ?? DBNull.Value);
-			cmd.Parameters.AddWithValue("@IsRetryable", EsRetryable(resultado));
-			cmd.Parameters.AddWithValue("@RespondedAt", DateTime.UtcNow);
-			await cmd.ExecuteNonQueryAsync();
+			if (source == "SALE_CUSTOMER")
+			{
+				return ClonarCliente(venta.Cliente);
+			}
+
+			if (source == "CUSTOM")
+			{
+				if (clienteRequest is null)
+				{
+					throw new InvalidOperationException("Debe enviar los datos del receptor cuando el origen es CUSTOM.");
+				}
+
+				return new ComprobanteVentaClienteDto
+				{
+					TipoDocumento = (clienteRequest.TipoDocumento ?? string.Empty).Trim().ToUpperInvariant(),
+					Documento = (clienteRequest.Documento ?? string.Empty).Trim(),
+					Nombre = (clienteRequest.Nombre ?? string.Empty).Trim(),
+					Direccion = (clienteRequest.Direccion ?? string.Empty).Trim(),
+					Correo = (clienteRequest.Correo ?? string.Empty).Trim()
+				};
+			}
+
+			if (tipo == "BOLETA" && source == "UNIDENTIFIED")
+			{
+				return new ComprobanteVentaClienteDto();
+			}
+
+			throw new InvalidOperationException("El origen del receptor no es válido.");
 		}
 
-		private static async Task<int> ObtenerSiguienteIntentoAsync(SqlConnection con, string voucherId, string operationType)
-		{
-			const string sql = """
-				SELECT ISNULL(MAX(AttemptNumber), 0) + 1
-				FROM dbo.SunatTransmission
-				WHERE VoucherId = @VoucherId
-				  AND OperationType = @OperationType;
-				""";
+		private static bool TieneDatosCliente(ComprobanteVentaClienteDto? cliente) =>
+			cliente is not null &&
+			(!string.IsNullOrWhiteSpace(cliente.TipoDocumento) ||
+			 !string.IsNullOrWhiteSpace(cliente.Documento) ||
+			 !string.IsNullOrWhiteSpace(cliente.Nombre) ||
+			 !string.IsNullOrWhiteSpace(cliente.Direccion) ||
+			 !string.IsNullOrWhiteSpace(cliente.Correo));
 
-			using var cmd = new SqlCommand(sql, con);
-			cmd.Parameters.AddWithValue("@VoucherId", Guid.Parse(voucherId));
-			cmd.Parameters.AddWithValue("@OperationType", operationType);
-			return Convert.ToInt32(await cmd.ExecuteScalarAsync());
-		}
+		private static ComprobanteVentaClienteDto ClonarCliente(ComprobanteVentaClienteDto cliente) =>
+			new()
+			{
+				TipoDocumento = cliente.TipoDocumento,
+				Documento = cliente.Documento,
+				Nombre = cliente.Nombre,
+				Direccion = cliente.Direccion,
+				Correo = cliente.Correo
+			};
 
-		private static void AplicarClientePreferido(VentaComprobanteDisponibleDto venta, ComprobanteVentaClienteDto? clienteRequest)
-		{
-			if (clienteRequest is null)
-			{
-				return;
-			}
-			
-			if (!string.IsNullOrWhiteSpace(clienteRequest.TipoDocumento))
-			{
-				venta.Cliente.TipoDocumento = clienteRequest.TipoDocumento.Trim().ToUpperInvariant();
-			}
-
-			if (!string.IsNullOrWhiteSpace(clienteRequest.Documento))
-			{
-				venta.Cliente.Documento = clienteRequest.Documento.Trim();
-			}
-
-			if (!string.IsNullOrWhiteSpace(clienteRequest.Nombre))
-			{
-				venta.Cliente.Nombre = clienteRequest.Nombre.Trim();
-			}
-
-			if (!string.IsNullOrWhiteSpace(clienteRequest.Direccion))
-			{
-				venta.Cliente.Direccion = clienteRequest.Direccion.Trim();
-			}
-
-			if (!string.IsNullOrWhiteSpace(clienteRequest.Correo))
-			{
-				venta.Cliente.Correo = clienteRequest.Correo.Trim();
-			}
-		}
+		private static bool DebePersistirClienteSnapshot(string tipo, string? receptorSource, ComprobanteVentaClienteDto cliente) =>
+			tipo == "FACTURA" ||
+			!string.Equals((receptorSource ?? "SALE_CUSTOMER").Trim(), "UNIDENTIFIED", StringComparison.OrdinalIgnoreCase) &&
+			(!string.IsNullOrWhiteSpace(cliente.Documento) || !string.IsNullOrWhiteSpace(cliente.Nombre) || !string.IsNullOrWhiteSpace(cliente.Direccion));
 
 		private static ComprobanteVentaPagoDto? NormalizarPago(ComprobanteVentaPagoDto? pago)
 		{
@@ -1016,10 +1006,12 @@ namespace ApiLinaAgbd.Services.Facturacion
 		private static void ValidarSolicitud(
 			string tipo,
 			VentaComprobanteDisponibleDto venta,
+			ComprobanteVentaClienteDto clienteFiscal,
 			DateTime fechaEmision,
 			DateTime? fechaVencimiento,
 			string moneda,
-			ComprobanteVentaPagoDto? pago)
+			ComprobanteVentaPagoDto? pago,
+			string? receptorSource)
 		{
 			if (moneda is not ("PEN" or "USD"))
 			{
@@ -1036,15 +1028,20 @@ namespace ApiLinaAgbd.Services.Facturacion
 
 			if (tipo == "BOLETA")
 			{
-				ValidarBoleta(venta.Cliente);
+				ValidarBoleta(clienteFiscal, receptorSource);
 				return;
 			}
 
-			ValidarFactura(venta.Cliente, fechaEmision, fechaVencimiento, venta.Total, pago);
+			ValidarFactura(clienteFiscal, fechaEmision, fechaVencimiento, venta.Total, pago);
 		}
 
-		private static void ValidarBoleta(ComprobanteVentaClienteDto cliente)
+		private static void ValidarBoleta(ComprobanteVentaClienteDto cliente, string? receptorSource)
 		{
+			if (string.Equals((receptorSource ?? string.Empty).Trim(), "UNIDENTIFIED", StringComparison.OrdinalIgnoreCase))
+			{
+				return;
+			}
+
 			var documento = (cliente.Documento ?? string.Empty).Trim();
 			var tipoDocumento = (cliente.TipoDocumento ?? string.Empty).Trim().ToUpperInvariant();
 
@@ -1144,15 +1141,16 @@ namespace ApiLinaAgbd.Services.Facturacion
 			}
 		}
 
-		private static BoletaRequestDto CrearBoletaRequest(
+		private static UblInvoicePayloadDto CrearBoletaRequest(
 			string serie,
 			string numero,
 			DateTime fechaEmision,
 			string horaEmision,
 			string moneda,
-			VentaComprobanteDisponibleDto venta)
+			VentaComprobanteDisponibleDto venta,
+			ComprobanteVentaClienteDto clienteFiscal)
 		{
-			return new BoletaRequestDto
+			return new UblInvoicePayloadDto
 			{
 				Serie = serie,
 				Correlativo = numero,
@@ -1160,20 +1158,20 @@ namespace ApiLinaAgbd.Services.Facturacion
 				HoraEmision = horaEmision,
 				Moneda = moneda,
 				MontoEnLetras = MontoEnLetras.EnSoles(venta.Total),
-				Cliente = new BoletaClienteDto
+				Cliente = new UblPartyPayloadDto
 				{
-					TipoDocumento = MapearTipoDocumentoSunat(venta.Cliente.TipoDocumento, false),
-					NumeroDocumento = string.IsNullOrWhiteSpace(venta.Cliente.Documento) ? "-" : venta.Cliente.Documento,
-					Nombre = string.IsNullOrWhiteSpace(venta.Cliente.Nombre) ? "CLIENTES VARIOS" : venta.Cliente.Nombre,
-					Direccion = string.IsNullOrWhiteSpace(venta.Cliente.Direccion) ? null : venta.Cliente.Direccion
+					TipoDocumento = MapearTipoDocumentoSunat(clienteFiscal.TipoDocumento, false),
+					NumeroDocumento = string.IsNullOrWhiteSpace(clienteFiscal.Documento) ? "-" : clienteFiscal.Documento,
+					Nombre = string.IsNullOrWhiteSpace(clienteFiscal.Nombre) ? "CLIENTES VARIOS" : clienteFiscal.Nombre,
+					Direccion = string.IsNullOrWhiteSpace(clienteFiscal.Direccion) ? null : clienteFiscal.Direccion
 				},
-				Totales = new BoletaTotalesDto
+				Totales = new UblTotalsPayloadDto
 				{
 					ValorVenta = venta.Subtotal,
 					Igv = venta.Igv,
 					Total = venta.Total
 				},
-				Items = venta.Detalle.Select(x => new BoletaItemDto
+				Items = venta.Detalle.Select(x => new UblItemPayloadDto
 				{
 					Descripcion = x.ProductoServicio,
 					Cantidad = x.Cantidad,
@@ -1188,7 +1186,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			};
 		}
 
-		private static FacturaRequestDto CrearFacturaRequest(
+		private static UblInvoicePayloadDto CrearFacturaRequest(
 			string serie,
 			string numero,
 			DateTime fechaEmision,
@@ -1196,9 +1194,10 @@ namespace ApiLinaAgbd.Services.Facturacion
 			string horaEmision,
 			string moneda,
 			VentaComprobanteDisponibleDto venta,
+			ComprobanteVentaClienteDto clienteFiscal,
 			ComprobanteVentaPagoDto? pago)
 		{
-			return new FacturaRequestDto
+			return new UblInvoicePayloadDto
 			{
 				Serie = serie,
 				Correlativo = numero,
@@ -1207,20 +1206,20 @@ namespace ApiLinaAgbd.Services.Facturacion
 				HoraEmision = horaEmision,
 				Moneda = moneda,
 				MontoEnLetras = MontoEnLetras.EnSoles(venta.Total),
-				Cliente = new FacturaClienteDto
+				Cliente = new UblPartyPayloadDto
 				{
-					TipoDocumento = MapearTipoDocumentoSunat(venta.Cliente.TipoDocumento, true),
-					NumeroDocumento = venta.Cliente.Documento,
-					Nombre = venta.Cliente.Nombre,
-					Direccion = string.IsNullOrWhiteSpace(venta.Cliente.Direccion) ? null : venta.Cliente.Direccion
+					TipoDocumento = MapearTipoDocumentoSunat(clienteFiscal.TipoDocumento, true),
+					NumeroDocumento = clienteFiscal.Documento,
+					Nombre = clienteFiscal.Nombre,
+					Direccion = string.IsNullOrWhiteSpace(clienteFiscal.Direccion) ? null : clienteFiscal.Direccion
 				},
-				Totales = new FacturaTotalesDto
+				Totales = new UblTotalsPayloadDto
 				{
 					ValorVenta = venta.Subtotal,
 					Igv = venta.Igv,
 					Total = venta.Total
 				},
-				Items = venta.Detalle.Select(x => new FacturaItemDto
+				Items = venta.Detalle.Select(x => new UblItemPayloadDto
 				{
 					Descripcion = x.ProductoServicio,
 					Cantidad = x.Cantidad,
@@ -1234,10 +1233,10 @@ namespace ApiLinaAgbd.Services.Facturacion
 				}).ToList(),
 				Pago = pago is null
 					? null
-					: new FacturaPagoDto
+					: new UblPaymentPayloadDto
 					{
 						FormaPago = pago.FormaPago == "CREDITO" ? "Credito" : "Contado",
-						Cuotas = pago.Cuotas.Select(x => new FacturaCuotaDto
+						Cuotas = pago.Cuotas.Select(x => new UblInstallmentPayloadDto
 						{
 							Monto = x.Monto,
 							FechaVencimiento = x.FechaVencimiento
@@ -1246,27 +1245,11 @@ namespace ApiLinaAgbd.Services.Facturacion
 			};
 		}
 
-		private static bool DocumentoValido(string tipoDocumento, string? numero)
-		{
-			var documento = (numero ?? string.Empty).Trim();
-			return tipoDocumento.ToUpperInvariant() switch
-			{
-				"DNI" => documento.Length == 8 && documento.All(char.IsDigit),
-				"RUC" => documento.Length == 11 && documento.All(char.IsDigit),
-				"CE" => documento.Length >= 6 && documento.Length <= 12,
-				_ => false
-			};
-		}
+		private static bool DocumentoValido(string tipoDocumento, string? numero) =>
+			FacturacionVoucherHelper.DocumentoValido(tipoDocumento, numero);
 
-		private static DateTime ParsearFechaObligatoria(string? fechaTexto, string mensaje)
-		{
-			if (!DateTime.TryParse(fechaTexto, CultureInfo.InvariantCulture, DateTimeStyles.None, out var fecha))
-			{
-				throw new InvalidOperationException(mensaje);
-			}
-
-			return fecha.Date;
-		}
+		private static DateTime ParsearFechaObligatoria(string? fechaTexto, string mensaje) =>
+			FacturacionVoucherHelper.ParsearFechaObligatoria(fechaTexto, mensaje);
 
 		private static decimal Redondear(decimal valor) =>
 			Math.Round(valor, 2, MidpointRounding.AwayFromZero);

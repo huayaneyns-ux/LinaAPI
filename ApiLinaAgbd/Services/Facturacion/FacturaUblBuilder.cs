@@ -1,5 +1,4 @@
 using ApiLinaAgbd.Models.Facturacion;
-using ApiLinaAgbd.Models.Facturacion.Factura;
 using ApiLinaAgbd.Models.Facturacion.Ubl;
 using Microsoft.Extensions.Options;
 
@@ -17,7 +16,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			_emisor = options.Value.Emisor ?? new EmisorSettings();
 		}
 
-		public UblInvoiceDocument Build(FacturaRequestDto request)
+		public UblInvoiceDocument Build(UblInvoicePayloadDto request)
 		{
 			var moneda = string.IsNullOrWhiteSpace(request.Moneda) ? "PEN" : request.Moneda;
 			var horaEmision = string.IsNullOrWhiteSpace(request.HoraEmision)
@@ -70,15 +69,33 @@ namespace ApiLinaAgbd.Services.Facturacion
 					{
 						Id = UblNode.Attr(_emisor.Ruc, "schemeID", _emisor.TipoDocumento)
 					},
+					PartyName = string.IsNullOrWhiteSpace(_emisor.NombreComercial)
+						? null
+						: new UblPartyName
+						{
+							Name = UblNode.Value(_emisor.NombreComercial)
+						},
 					PartyLegalEntity = new UblPartyLegalEntity
 					{
-						RegistrationName = UblNode.Value(_emisor.RazonSocial)
+						RegistrationName = UblNode.Value(_emisor.RazonSocial),
+						RegistrationAddress = new UblRegistrationAddress
+						{
+							AddressTypeCode = string.IsNullOrWhiteSpace(_emisor.CodigoEstablecimiento)
+								? null
+								: UblNode.Value(_emisor.CodigoEstablecimiento),
+							AddressLine = string.IsNullOrWhiteSpace(_emisor.Direccion)
+								? null
+								: new UblAddressLine
+								{
+									Line = UblNode.Value(_emisor.Direccion)
+								}
+						}
 					}
 				}
 			};
 		}
 
-		private static UblAccountingParty BuildCliente(FacturaClienteDto cliente)
+		private static UblAccountingParty BuildCliente(UblPartyPayloadDto cliente)
 		{
 			var direccion = string.IsNullOrWhiteSpace(cliente.Direccion)
 				? null
@@ -136,7 +153,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			};
 		}
 
-		private static List<UblInvoiceLine> BuildLineas(List<FacturaItemDto> items, string moneda)
+		private static List<UblInvoiceLine> BuildLineas(List<UblItemPayloadDto> items, string moneda)
 		{
 			var lineas = new List<UblInvoiceLine>();
 
@@ -178,7 +195,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			return lineas;
 		}
 
-		private static List<UblPaymentTerms>? BuildPaymentTerms(FacturaPagoDto? pago, string moneda)
+		private static List<UblPaymentTerms>? BuildPaymentTerms(UblPaymentPayloadDto? pago, string moneda)
 		{
 			if (pago is null)
 			{

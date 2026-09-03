@@ -19,8 +19,9 @@ namespace ApiLinaAgbd.Models.Facturacion.ComprobantesVenta
 
 		public string? Observaciones { get; set; }
 
-		[Required]
-		public ComprobanteVentaClienteDto Cliente { get; set; } = new();
+		public string ReceptorSource { get; set; } = "SALE_CUSTOMER";
+
+		public ComprobanteVentaClienteDto? Cliente { get; set; }
 
 		public ComprobanteVentaPagoDto? Pago { get; set; }
 	}
@@ -36,6 +37,10 @@ namespace ApiLinaAgbd.Models.Facturacion.ComprobantesVenta
 		public string Direccion { get; set; } = string.Empty;
 
 		public string Correo { get; set; } = string.Empty;
+	}
+
+	public class ComprobanteVentaClienteSnapshotDto : ComprobanteVentaClienteDto
+	{
 	}
 
 	public class ComprobanteVentaPagoDto

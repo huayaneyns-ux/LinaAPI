@@ -55,6 +55,11 @@ namespace ApiLinaAgbd.Services
 
 			try
 			{
+				_logger.LogInformation(
+					"Enviando {FileName} a APISUNAT con documentBody: {DocumentBody}",
+					fileName,
+					JsonSerializer.Serialize(documentBody, JsonOptions));
+
 				using var response = await _httpClient.PostAsJsonAsync(path, payload, JsonOptions);
 				var cuerpo = await response.Content.ReadAsStringAsync();
 				var respuestaApi = ParsearCuerpo(cuerpo);
@@ -62,9 +67,7 @@ namespace ApiLinaAgbd.Services
 				var codigoRespuestaSunat =
 					ObtenerValor(respuestaApi, "responseCode") ??
 					ObtenerValor(respuestaApi, "code");
-				var mensajeSunat =
-					ObtenerValor(respuestaApi, "message") ??
-					ObtenerValor(respuestaApi, "description");
+				var mensajeSunat = ObtenerMensajeDocumento(respuestaApi);
 				var documentId =
 					ObtenerValor(respuestaApi, "documentId") ??
 					ObtenerValor(respuestaApi, "id");
@@ -270,7 +273,7 @@ namespace ApiLinaAgbd.Services
 					DocumentId = documentId,
 					RespuestaApi = respuestaApi,
 					EstadoSunat = estadoSunat,
-					MensajeSunat = ObtenerValor(respuestaApi, "message") ?? ObtenerValor(respuestaApi, "description")
+					MensajeSunat = ObtenerMensajeDocumento(respuestaApi)
 				};
 			}
 			catch (TaskCanceledException ex)
