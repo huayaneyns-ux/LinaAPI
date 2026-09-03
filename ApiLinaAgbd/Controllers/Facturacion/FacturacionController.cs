@@ -57,6 +57,13 @@ namespace ApiLinaAgbd.Controllers.Facturacion
 			return Ok(comprobantes);
 		}
 
+		[HttpGet("comprobantes/transmisiones-sunat")]
+		public async Task<IActionResult> ListarTransmisionesSunat()
+		{
+			var transmisiones = await _documentoFacturacionService.ListarTransmisionesSunatAsync();
+			return Ok(transmisiones);
+		}
+
 		[HttpGet("comprobantes/ventas/{id}")]
 		public async Task<IActionResult> ObtenerComprobanteVenta(string id)
 		{

@@ -5,6 +5,7 @@ using ApiLinaAgbd.Data;
 using ApiLinaAgbd.Models.Facturacion;
 using ApiLinaAgbd.Models.Facturacion.ComprobantesVenta;
 using ApiLinaAgbd.Models.Facturacion.Documentos;
+using ApiLinaAgbd.Models.Facturacion.SunatTransmission;
 using Microsoft.Extensions.Options;
 
 namespace ApiLinaAgbd.Services.Facturacion
@@ -503,6 +504,76 @@ namespace ApiLinaAgbd.Services.Facturacion
 				_ when normalizedSunatStatus == "RECHAZADO" => "RECHAZADO",
 				_ => "EMITIDO"
 			};
+		}
+
+		public async Task<List<SunatTransmissionDto>> ListarTransmisionesSunatAsync()
+		{
+			var transmisiones = new List<SunatTransmissionDto>();
+			using var con = _conexion.ObtenerConexion();
+			await con.OpenAsync();
+
+			const string sql = """
+				SELECT
+					t.Id,
+					t.VoucherId,
+					t.AttemptNumber,
+					t.OperationType,
+					t.TransmissionStatus,
+					t.HttpStatus,
+					t.SunatStatus,
+					t.SunatDocumentId,
+					t.ErrorMessage,
+					t.IsRetryable,
+					t.NextRetryAt,
+					t.RespondedAt,
+					t.CreatedAt,
+					CASE
+						WHEN t.RespondedAt IS NOT NULL
+						THEN DATEDIFF(millisecond, t.CreatedAt, t.RespondedAt)
+						ELSE NULL
+					END AS ResponseTimeMs,
+					v.SunatTypeCode,
+					v.Series,
+					v.Number,
+					v.Total,
+					COALESCE(cust.LegalName, v.IssuerLegalName, '') AS CustomerName
+				FROM dbo.SunatTransmission t
+				INNER JOIN dbo.Voucher v ON v.Id = t.VoucherId
+				LEFT JOIN dbo.VoucherParty cust ON cust.VoucherId = v.Id AND cust.PartyType = 'CUSTOMER'
+				ORDER BY t.CreatedAt DESC, t.AttemptNumber DESC;
+				""";
+
+			using var cmd = new SqlCommand(sql, con) { CommandType = CommandType.Text };
+			using var dr = await cmd.ExecuteReaderAsync();
+
+			while (await dr.ReadAsync())
+			{
+				var item = new SunatTransmissionDto
+				{
+					Id = dr.GetGuid(dr.GetOrdinal("Id")),
+					VoucherId = dr.GetGuid(dr.GetOrdinal("VoucherId")),
+					AttemptNumber = dr.GetInt32(dr.GetOrdinal("AttemptNumber")),
+					OperationType = dr["OperationType"]?.ToString() ?? string.Empty,
+					TransmissionStatus = dr["TransmissionStatus"]?.ToString() ?? string.Empty,
+					HttpStatus = dr.IsDBNull(dr.GetOrdinal("HttpStatus")) ? null : dr.GetInt32(dr.GetOrdinal("HttpStatus")),
+					SunatStatus = dr.IsDBNull(dr.GetOrdinal("SunatStatus")) ? null : dr["SunatStatus"]?.ToString(),
+					SunatDocumentId = dr.IsDBNull(dr.GetOrdinal("SunatDocumentId")) ? null : dr["SunatDocumentId"]?.ToString(),
+					ErrorMessage = dr.IsDBNull(dr.GetOrdinal("ErrorMessage")) ? null : dr["ErrorMessage"]?.ToString(),
+					IsRetryable = !dr.IsDBNull(dr.GetOrdinal("IsRetryable")) && dr.GetBoolean(dr.GetOrdinal("IsRetryable")),
+					NextRetryAt = dr.IsDBNull(dr.GetOrdinal("NextRetryAt")) ? null : dr.GetDateTime(dr.GetOrdinal("NextRetryAt")),
+					RespondedAt = dr.IsDBNull(dr.GetOrdinal("RespondedAt")) ? null : dr.GetDateTime(dr.GetOrdinal("RespondedAt")),
+					CreatedAt = dr.GetDateTime(dr.GetOrdinal("CreatedAt")),
+					ResponseTimeMs = dr.IsDBNull(dr.GetOrdinal("ResponseTimeMs")) ? null : Convert.ToInt32(dr["ResponseTimeMs"]),
+					VoucherTypeCode = dr.IsDBNull(dr.GetOrdinal("SunatTypeCode")) ? null : dr["SunatTypeCode"]?.ToString(),
+					Series = dr.IsDBNull(dr.GetOrdinal("Series")) ? null : dr["Series"]?.ToString(),
+					Number = dr.IsDBNull(dr.GetOrdinal("Number")) ? null : dr["Number"]?.ToString(),
+					Total = dr.IsDBNull(dr.GetOrdinal("Total")) ? null : Convert.ToDecimal(dr["Total"]),
+					CustomerName = dr.IsDBNull(dr.GetOrdinal("CustomerName")) ? null : dr["CustomerName"]?.ToString()
+				};
+				transmisiones.Add(item);
+			}
+
+			return transmisiones;
 		}
 	}
 }
