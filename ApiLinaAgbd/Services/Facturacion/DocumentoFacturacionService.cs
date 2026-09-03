@@ -568,10 +568,10 @@ namespace ApiLinaAgbd.Services.Facturacion
 					Descripcion = item.ProductoServicio,
 					Cantidad = item.Cantidad,
 					PrecioUnitario = item.Precio,
-					ValorVenta = item.Cantidad * item.Precio,
+					ValorVenta = FacturacionVoucherHelper.Redondear(item.Cantidad * item.Precio),
 					Igv = item.Igv,
 					Importe = item.Importe,
-					PrecioConIgv = item.Cantidad <= 0 ? item.Precio : item.Importe / item.Cantidad,
+					PrecioConIgv = item.Cantidad <= 0 ? item.Precio : FacturacionVoucherHelper.Redondear(item.Importe / item.Cantidad),
 					UnidadMedida = "NIU"
 				}).ToList()
 			};
@@ -606,10 +606,10 @@ namespace ApiLinaAgbd.Services.Facturacion
 					Descripcion = item.ProductoServicio,
 					Cantidad = item.Cantidad,
 					PrecioUnitario = item.Precio,
-					ValorVenta = item.Cantidad * item.Precio,
+					ValorVenta = FacturacionVoucherHelper.Redondear(item.Cantidad * item.Precio),
 					Igv = item.Igv,
 					Importe = item.Importe,
-					PrecioConIgv = item.Cantidad <= 0 ? item.Precio : item.Importe / item.Cantidad,
+					PrecioConIgv = item.Cantidad <= 0 ? item.Precio : FacturacionVoucherHelper.Redondear(item.Importe / item.Cantidad),
 					UnidadMedida = "NIU"
 				}).ToList(),
 				Pago = voucher.Pago is null
@@ -662,10 +662,10 @@ namespace ApiLinaAgbd.Services.Facturacion
 					Descripcion = item.ProductoServicio,
 					Cantidad = item.Cantidad,
 					PrecioUnitario = item.Precio,
-					ValorVenta = item.Cantidad * item.Precio,
+					ValorVenta = FacturacionVoucherHelper.Redondear(item.Cantidad * item.Precio),
 					Igv = item.Igv,
 					Importe = item.Importe,
-					PrecioConIgv = item.Cantidad <= 0 ? item.Precio : item.Importe / item.Cantidad,
+					PrecioConIgv = item.Cantidad <= 0 ? item.Precio : FacturacionVoucherHelper.Redondear(item.Importe / item.Cantidad),
 					UnidadMedida = "NIU"
 				}).ToList()
 			};
@@ -709,10 +709,10 @@ namespace ApiLinaAgbd.Services.Facturacion
 					Descripcion = item.ProductoServicio,
 					Cantidad = item.Cantidad,
 					PrecioUnitario = item.Precio,
-					ValorVenta = item.Cantidad * item.Precio,
+					ValorVenta = FacturacionVoucherHelper.Redondear(item.Cantidad * item.Precio),
 					Igv = item.Igv,
 					Importe = item.Importe,
-					PrecioConIgv = item.Cantidad <= 0 ? item.Precio : item.Importe / item.Cantidad,
+					PrecioConIgv = item.Cantidad <= 0 ? item.Precio : FacturacionVoucherHelper.Redondear(item.Importe / item.Cantidad),
 					UnidadMedida = "NIU"
 				}).ToList()
 			};
