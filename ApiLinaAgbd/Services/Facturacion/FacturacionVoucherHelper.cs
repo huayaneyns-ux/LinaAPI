@@ -55,6 +55,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 		{
 			return (estado ?? string.Empty).Trim().ToUpperInvariant() switch
 			{
+				"ANULADO" => "ANULADO",
 				"ACEPTADO" => "ACEPTADO",
 				"RECHAZADO" => "RECHAZADO",
 				"EXCEPCION" => "EXCEPCION",
@@ -318,7 +319,13 @@ namespace ApiLinaAgbd.Services.Facturacion
 			await cmd.ExecuteNonQueryAsync();
 		}
 
-		internal static async Task RegistrarTransmisionAsync(SqlConnection con, Guid voucherId, string operationType, FacturacionEnvioResultado resultado)
+		internal static async Task RegistrarTransmisionAsync(
+			SqlConnection con,
+			Guid voucherId,
+			string operationType,
+			FacturacionEnvioResultado resultado,
+			DateTime createdAtUtc,
+			DateTime? respondedAtUtc = null)
 		{
 			var nextAttempt = await ObtenerSiguienteIntentoAsync(con, voucherId, operationType);
 			var transmissionId = Guid.NewGuid();
@@ -335,6 +342,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 					SunatStatus,
 					SunatDocumentId,
 					ErrorMessage,
+					CreatedAt,
 					RespondedAt
 				)
 				VALUES
@@ -348,6 +356,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 					@SunatStatus,
 					@SunatDocumentId,
 					@ErrorMessage,
+					@CreatedAt,
 					@RespondedAt
 				);
 				""";
@@ -362,7 +371,8 @@ namespace ApiLinaAgbd.Services.Facturacion
 			cmd.Parameters.Add("@SunatStatus", SqlDbType.VarChar, 30).Value = NormalizarSunatStatusParaVoucher(resultado);
 			cmd.Parameters.AddWithValue("@SunatDocumentId", (object?)resultado.DocumentId ?? DBNull.Value);
 			cmd.Parameters.AddWithValue("@ErrorMessage", (object?)ObtenerResumenTransmision(resultado) ?? DBNull.Value);
-			cmd.Parameters.AddWithValue("@RespondedAt", DateTime.UtcNow);
+			cmd.Parameters.AddWithValue("@CreatedAt", createdAtUtc);
+			cmd.Parameters.AddWithValue("@RespondedAt", respondedAtUtc ?? DateTime.UtcNow);
 			await cmd.ExecuteNonQueryAsync();
 			await InsertarMensajesTransmisionAsync(con, transmissionId, resultado.RespuestaApi, "faults", "dbo.SunatTransmissionFault");
 			await InsertarMensajesTransmisionAsync(con, transmissionId, resultado.RespuestaApi, "notes", "dbo.SunatTransmissionNote");
@@ -437,17 +447,13 @@ namespace ApiLinaAgbd.Services.Facturacion
 			const string sql = """
 				UPDATE dbo.Voucher
 				SET
-					SunatStatus = CASE
-						WHEN @SunatStatus IN ('NO_ENVIADO', 'PENDIENTE', 'ACEPTADO', 'RECHAZADO', 'EXCEPCION') THEN @SunatStatus
-						ELSE 'EXCEPCION'
-					END,
+					SunatStatus = 'ANULADO',
 					UpdatedAt = SYSUTCDATETIME()
 				WHERE Id = @Id;
 				""";
 
 			using var cmd = new SqlCommand(sql, con);
 			cmd.Parameters.AddWithValue("@Id", voucherId);
-			cmd.Parameters.Add("@SunatStatus", SqlDbType.VarChar, 30).Value = NormalizarSunatStatusParaVoucher(resultado);
 			await cmd.ExecuteNonQueryAsync();
 		}
 

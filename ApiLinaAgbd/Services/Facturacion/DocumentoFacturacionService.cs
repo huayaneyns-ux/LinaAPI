@@ -361,11 +361,16 @@ namespace ApiLinaAgbd.Services.Facturacion
 		public async Task<DocumentoFacturacionDto> SincronizarEstadoSunatAsync(string id)
 		{
 			var voucher = await ObtenerPorIdAsync(id);
+			if (EsAnulacionConfirmada(voucher.Estado, voucher.EstadoSunat))
+			{
+				throw new InvalidOperationException("El comprobante ya fue anulado y confirmado por SUNAT. No se puede actualizar nuevamente.");
+			}
 			if (string.IsNullOrWhiteSpace(voucher.DocumentId))
 			{
 				throw new InvalidOperationException("El documento no tiene documentId registrado en APISUNAT.");
 			}
 
+			var consultaInicioUtc = DateTime.UtcNow;
 			var consulta = await _facturacionSunatService.ObtenerDocumentoPorId(voucher.DocumentId);
 			if (!consulta.Exitoso)
 			{
@@ -375,7 +380,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			using var con = _conexion.ObtenerConexion();
 			await con.OpenAsync();
 			await FacturacionVoucherHelper.ActualizarVoucherPostConsultaAsync(con, Guid.Parse(voucher.Id), consulta);
-			await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, Guid.Parse(voucher.Id), "STATUS_QUERY", consulta);
+			await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, Guid.Parse(voucher.Id), "STATUS_QUERY", consulta, consultaInicioUtc);
 
 			return await ObtenerPorIdAsync(id);
 		}
@@ -429,6 +434,10 @@ namespace ApiLinaAgbd.Services.Facturacion
 		public async Task<DocumentoFacturacionDto> AnularAsync(string id, string reason)
 		{
 			var voucher = await ObtenerPorIdAsync(id);
+			if (EsAnulacionConfirmada(voucher.Estado, voucher.EstadoSunat))
+			{
+				throw new InvalidOperationException("El comprobante ya fue anulado y confirmado por SUNAT.");
+			}
 			if (string.IsNullOrWhiteSpace(voucher.DocumentId))
 			{
 				throw new InvalidOperationException("El documento no tiene documentId registrado en APISUNAT.");
@@ -440,6 +449,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 				throw new InvalidOperationException("El motivo de anulación debe tener entre 3 y 100 caracteres.");
 			}
 
+			var anuladoInicioUtc = DateTime.UtcNow;
 			var resultado = await _facturacionSunatService.AnularDocumento(voucher.DocumentId, motivo);
 			if (!resultado.Exitoso)
 			{
@@ -449,7 +459,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			using var con = _conexion.ObtenerConexion();
 			await con.OpenAsync();
 			await FacturacionVoucherHelper.ActualizarVoucherPostAnulacionAsync(con, Guid.Parse(voucher.Id), resultado);
-			await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, Guid.Parse(voucher.Id), "VOID", resultado);
+			await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, Guid.Parse(voucher.Id), "VOID", resultado, anuladoInicioUtc);
 
 			return await ObtenerPorIdAsync(id);
 		}
@@ -544,7 +554,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 					t.RespondedAt,
 					t.CreatedAt,
 					CASE
-						WHEN t.RespondedAt IS NOT NULL
+						WHEN t.RespondedAt IS NOT NULL AND t.RespondedAt >= t.CreatedAt
 						THEN DATEDIFF(millisecond, t.CreatedAt, t.RespondedAt)
 						ELSE NULL
 					END AS ResponseTimeMs,
@@ -589,5 +599,9 @@ namespace ApiLinaAgbd.Services.Facturacion
 
 			return transmisiones;
 		}
+
+		private static bool EsAnulacionConfirmada(string? estado, string? estadoSunat) =>
+			string.Equals((estado ?? string.Empty).Trim().ToUpperInvariant(), "ANULADO", StringComparison.OrdinalIgnoreCase) &&
+			string.Equals((estadoSunat ?? string.Empty).Trim().ToUpperInvariant(), "ANULADO", StringComparison.OrdinalIgnoreCase);
 	}
 }

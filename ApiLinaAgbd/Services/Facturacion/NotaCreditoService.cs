@@ -227,6 +227,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			}, referencia);
 
 			var fileName = $"{_settings.Emisor.Ruc}-07-{serie}-{numero}";
+			var solicitudUtc = DateTime.UtcNow;
 			var envio = await _facturacionSunatService.EnviarDocumento(fileName, body);
 
 			if (!FacturacionVoucherHelper.FueRecibidoPorApi(envio))
@@ -241,7 +242,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			{
 				await con.OpenAsync();
 				await FacturacionVoucherHelper.ActualizarVoucherPostEnvioAsync(con, voucherId, envio, _pdfLocalService);
-				await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", envio);
+				await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", envio, solicitudUtc);
 			}
 
 			return new NotaComprobanteResultadoDto
@@ -346,6 +347,11 @@ namespace ApiLinaAgbd.Services.Facturacion
 			if (!motivosValidos.Contains(request.Motivo.Codigo))
 			{
 				throw new InvalidOperationException("El código del motivo de nota de crédito no es válido.");
+			}
+
+			if (referencia.SunatTypeCode == "03" && request.Motivo.Codigo is "04" or "05" or "08")
+			{
+				throw new InvalidOperationException("Las notas de crédito 04, 05 y 08 no pueden vincularse a una boleta.");
 			}
 
 			if (string.IsNullOrWhiteSpace(request.Motivo.Descripcion))

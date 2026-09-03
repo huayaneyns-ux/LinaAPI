@@ -282,6 +282,21 @@ namespace ApiLinaAgbd.Services
 				var cuerpo = await response.Content.ReadAsStringAsync();
 				var respuestaApi = ParsearCuerpo(cuerpo);
 				var estadoSunat = ObtenerValor(respuestaApi, "status");
+				if (response.IsSuccessStatusCode)
+				{
+					var estadoNormalizado = (estadoSunat ?? string.Empty).Trim().ToUpperInvariant();
+					estadoSunat = estadoNormalizado switch
+					{
+						"RECHAZADO" => "RECHAZADO",
+						"EXCEPCION" => "EXCEPCION",
+						"OBSERVADO" => "OBSERVADO",
+						"ACEPTADO" => "ACEPTADO",
+						"PENDING" => "ACEPTADO",
+						"SUCCESS" => "ACEPTADO",
+						"ENVIADO" => "PENDIENTE",
+						_ => "ACEPTADO"
+					};
+				}
 
 				return new FacturacionEnvioResultado
 				{

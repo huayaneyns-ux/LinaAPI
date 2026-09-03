@@ -366,11 +366,16 @@ namespace ApiLinaAgbd.Services.Facturacion
 		public async Task<ComprobanteVentaListItemDto> SincronizarEstadoSunatAsync(string id)
 		{
 			var voucher = await ObtenerComprobantePorIdAsync(id);
+			if (EsAnulacionConfirmada(voucher.Estado, voucher.EstadoSunat))
+			{
+				throw new InvalidOperationException("El comprobante ya fue anulado y confirmado por SUNAT. No se puede actualizar nuevamente.");
+			}
 			if (string.IsNullOrWhiteSpace(voucher.DocumentId))
 			{
 				throw new InvalidOperationException("El comprobante no tiene documentId registrado en APISUNAT.");
 			}
 
+			var consultaInicioUtc = DateTime.UtcNow;
 			var consulta = await _facturacionSunatService.ObtenerDocumentoPorId(voucher.DocumentId);
 			if (!consulta.Exitoso)
 			{
@@ -380,7 +385,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			using var con = _conexion.ObtenerConexion();
 			await con.OpenAsync();
 			await ActualizarVoucherPostConsultaAsync(con, id, consulta);
-			await RegistrarTransmisionAsync(con, id, "STATUS_QUERY", consulta);
+			await RegistrarTransmisionAsync(con, id, "STATUS_QUERY", consulta, consultaInicioUtc);
 
 			return await ObtenerComprobantePorIdAsync(id);
 		}
@@ -433,6 +438,10 @@ namespace ApiLinaAgbd.Services.Facturacion
 		public async Task<ComprobanteVentaListItemDto> AnularAsync(string id, string reason)
 		{
 			var voucher = await ObtenerComprobantePorIdAsync(id);
+			if (EsAnulacionConfirmada(voucher.Estado, voucher.EstadoSunat))
+			{
+				throw new InvalidOperationException("El comprobante ya fue anulado y confirmado por SUNAT.");
+			}
 			if (string.IsNullOrWhiteSpace(voucher.DocumentId))
 			{
 				throw new InvalidOperationException("El comprobante no tiene documentId registrado en APISUNAT.");
@@ -444,6 +453,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 				throw new InvalidOperationException("El motivo de anulación debe tener entre 3 y 100 caracteres.");
 			}
 
+			var anuladoInicioUtc = DateTime.UtcNow;
 			var resultado = await _facturacionSunatService.AnularDocumento(voucher.DocumentId, motivo);
 			if (!resultado.Exitoso)
 			{
@@ -453,7 +463,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			using var con = _conexion.ObtenerConexion();
 			await con.OpenAsync();
 			await ActualizarVoucherPostAnulacionAsync(con, id, resultado);
-			await RegistrarTransmisionAsync(con, id, "VOID", resultado);
+			await RegistrarTransmisionAsync(con, id, "VOID", resultado, anuladoInicioUtc);
 
 			return await ObtenerComprobantePorIdAsync(id);
 		}
@@ -514,6 +524,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 				? _boletaBuilder.Build(boletaRequest!)
 				: _facturaBuilder.Build(facturaRequest!);
 			var fileName = $"{_settings.Emisor.Ruc}-{tipoComprobanteSunat}-{serie}-{numero}";
+			var solicitudUtc = DateTime.UtcNow;
 			var envio = await _facturacionSunatService.EnviarDocumento(fileName, documentBody);
 
 			if (!FacturacionVoucherHelper.FueRecibidoPorApi(envio))
@@ -528,7 +539,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			{
 				await con.OpenAsync();
 				await ActualizarVoucherPostEnvioAsync(con, voucherId, envio);
-				await RegistrarTransmisionAsync(con, voucherId.ToString(), "SEND", envio);
+				await RegistrarTransmisionAsync(con, voucherId.ToString(), "SEND", envio, solicitudUtc);
 			}
 
 			return await ObtenerComprobantePorIdAsync(voucherId.ToString());
@@ -928,23 +939,23 @@ namespace ApiLinaAgbd.Services.Facturacion
 			const string sql = """
 				UPDATE dbo.Voucher
 				SET
-					SunatStatus = CASE
-						WHEN @SunatStatus IN ('NO_ENVIADO', 'PENDIENTE', 'ACEPTADO', 'RECHAZADO', 'EXCEPCION') THEN @SunatStatus
-						ELSE 'EXCEPCION'
-					END,
+					SunatStatus = 'ANULADO',
 					UpdatedAt = SYSUTCDATETIME()
 				WHERE Id = @Id;
 				""";
 
-			var sunatStatus = NormalizarSunatStatusParaVoucher(resultado);
 			using var cmd = new SqlCommand(sql, con);
 			cmd.Parameters.AddWithValue("@Id", Guid.Parse(voucherId));
-			cmd.Parameters.Add("@SunatStatus", SqlDbType.VarChar, 30).Value = sunatStatus;
 			await cmd.ExecuteNonQueryAsync();
 		}
 
-		private async Task RegistrarTransmisionAsync(SqlConnection con, string voucherId, string operationType, FacturacionEnvioResultado resultado)
-			=> await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, Guid.Parse(voucherId), operationType, resultado);
+		private async Task RegistrarTransmisionAsync(
+			SqlConnection con,
+			string voucherId,
+			string operationType,
+			FacturacionEnvioResultado resultado,
+			DateTime createdAtUtc)
+			=> await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, Guid.Parse(voucherId), operationType, resultado, createdAtUtc);
 
 		private static ComprobanteVentaClienteDto ResolverClienteFiscal(
 			VentaComprobanteDisponibleDto venta,
@@ -1355,6 +1366,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 		{
 			return (estado ?? string.Empty).Trim().ToUpperInvariant() switch
 			{
+				"ANULADO" => "ANULADO",
 				"ACEPTADO" => "ACEPTADO",
 				"RECHAZADO" => "RECHAZADO",
 				"EXCEPCION" => "EXCEPCION",
@@ -1364,6 +1376,10 @@ namespace ApiLinaAgbd.Services.Facturacion
 				_ => "PENDIENTE"
 			};
 		}
+
+		private static bool EsAnulacionConfirmada(string? estado, string? estadoSunat) =>
+			string.Equals((estado ?? string.Empty).Trim(), "ANULADO", StringComparison.OrdinalIgnoreCase) &&
+			string.Equals((estadoSunat ?? string.Empty).Trim(), "ANULADO", StringComparison.OrdinalIgnoreCase);
 
 		private static string MapearEstadoSunatPersistencia(FacturacionEnvioResultado envio)
 		{

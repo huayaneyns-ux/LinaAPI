@@ -110,6 +110,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			});
 
 			var fileName = $"{_settings.Emisor.Ruc}-08-{serie}-{numero}";
+			var solicitudUtc = DateTime.UtcNow;
 			var envio = await _facturacionSunatService.EnviarDocumento(fileName, body);
 
 			if (!FacturacionVoucherHelper.FueRecibidoPorApi(envio))
@@ -124,7 +125,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			{
 				await con.OpenAsync();
 				await FacturacionVoucherHelper.ActualizarVoucherPostEnvioAsync(con, voucherId, envio, _pdfLocalService);
-				await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", envio);
+				await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", envio, solicitudUtc);
 			}
 
 			return new NotaComprobanteResultadoDto
