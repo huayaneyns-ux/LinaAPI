@@ -75,6 +75,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 				LEFT JOIN dbo.VoucherItem vi
 					ON vi.VoucherId = v.Id
 				WHERE v.SunatTypeCode IN ('01', '03')
+				  AND ISNULL(v.SunatStatus, 'NO_ENVIADO') = 'ACEPTADO'
 				ORDER BY v.CreatedAt DESC, vi.LineNumber ASC;
 				""";
 
@@ -232,9 +233,10 @@ namespace ApiLinaAgbd.Services.Facturacion
 
 			if (!FacturacionVoucherHelper.FueRecibidoPorApi(envio))
 			{
-				using var conLimpieza = _conexion.ObtenerConexion();
-				await conLimpieza.OpenAsync();
-				await FacturacionVoucherHelper.EliminarVoucherAsync(conLimpieza, voucherId);
+				using var conFallo = _conexion.ObtenerConexion();
+				await conFallo.OpenAsync();
+				await FacturacionVoucherHelper.ActualizarVoucherPostFalloComunicacionAsync(conFallo, voucherId);
+				await FacturacionVoucherHelper.RegistrarTransmisionAsync(conFallo, voucherId, "SEND", envio, solicitudUtc);
 				throw new InvalidOperationException(envio.DetalleError ?? envio.MensajeSunat ?? envio.Mensaje);
 			}
 

@@ -97,6 +97,25 @@ namespace ApiLinaAgbd.Services.Facturacion
 		internal static bool FueRecibidoPorApi(FacturacionEnvioResultado resultado) =>
 			resultado.Exitoso;
 
+		internal static bool EsFalloDeComunicacion(FacturacionEnvioResultado resultado)
+		{
+			if (resultado.Exitoso)
+			{
+				return false;
+			}
+
+			if (resultado.StatusCode is 502 or 504)
+			{
+				return true;
+			}
+
+			var detalle = (resultado.DetalleError ?? string.Empty).ToLowerInvariant();
+			return detalle.Contains("timeout", StringComparison.Ordinal) ||
+				detalle.Contains("connection", StringComparison.Ordinal) ||
+				detalle.Contains("conex", StringComparison.Ordinal) ||
+				detalle.Contains("socket", StringComparison.Ordinal);
+		}
+
 		internal static List<string> SepararObservaciones(string? observaciones)
 		{
 			if (string.IsNullOrWhiteSpace(observaciones))
@@ -414,6 +433,24 @@ namespace ApiLinaAgbd.Services.Facturacion
 			cmd.Parameters.AddWithValue("@PdfA5Url", (object?)urlsPdfLocales.A5 ?? DBNull.Value);
 			cmd.Parameters.AddWithValue("@Pdf58mmUrl", (object?)urlsPdfLocales.Ticket58 ?? DBNull.Value);
 			cmd.Parameters.AddWithValue("@Pdf80mmUrl", (object?)urlsPdfLocales.Ticket80 ?? DBNull.Value);
+			await cmd.ExecuteNonQueryAsync();
+		}
+
+		internal static async Task ActualizarVoucherPostFalloComunicacionAsync(SqlConnection con, Guid voucherId)
+		{
+			const string sql = """
+				UPDATE dbo.Voucher
+				SET
+					SunatStatus = CASE
+						WHEN SunatStatus IN ('NO_ENVIADO', 'PENDIENTE', 'ACEPTADO', 'RECHAZADO', 'EXCEPCION') THEN SunatStatus
+						ELSE 'EXCEPCION'
+					END,
+					UpdatedAt = SYSUTCDATETIME()
+				WHERE Id = @Id;
+				""";
+
+			using var cmd = new SqlCommand(sql, con);
+			cmd.Parameters.AddWithValue("@Id", voucherId);
 			await cmd.ExecuteNonQueryAsync();
 		}
 

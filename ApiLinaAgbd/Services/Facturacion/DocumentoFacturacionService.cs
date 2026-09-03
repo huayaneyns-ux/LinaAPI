@@ -5,7 +5,10 @@ using ApiLinaAgbd.Data;
 using ApiLinaAgbd.Models.Facturacion;
 using ApiLinaAgbd.Models.Facturacion.ComprobantesVenta;
 using ApiLinaAgbd.Models.Facturacion.Documentos;
+using ApiLinaAgbd.Models.Facturacion.LiquidacionCompra;
+using ApiLinaAgbd.Models.Facturacion.Notas;
 using ApiLinaAgbd.Models.Facturacion.SunatTransmission;
+using ApiLinaAgbd.Models.Facturacion.Ubl;
 using Microsoft.Extensions.Options;
 
 namespace ApiLinaAgbd.Services.Facturacion
@@ -15,17 +18,32 @@ namespace ApiLinaAgbd.Services.Facturacion
 		private readonly Conexion _conexion;
 		private readonly FacturacionSunatService _facturacionSunatService;
 		private readonly FacturacionPdfLocalService _pdfLocalService;
+		private readonly BoletaUblBuilder _boletaBuilder;
+		private readonly FacturaUblBuilder _facturaBuilder;
+		private readonly NotaCreditoUblBuilder _notaCreditoBuilder;
+		private readonly NotaDebitoUblBuilder _notaDebitoBuilder;
+		private readonly LiquidacionCompraUblBuilder _liquidacionBuilder;
 		private readonly FacturacionSettings _settings;
 
 		public DocumentoFacturacionService(
 			Conexion conexion,
 			FacturacionSunatService facturacionSunatService,
 			FacturacionPdfLocalService pdfLocalService,
+			BoletaUblBuilder boletaBuilder,
+			FacturaUblBuilder facturaBuilder,
+			NotaCreditoUblBuilder notaCreditoBuilder,
+			NotaDebitoUblBuilder notaDebitoBuilder,
+			LiquidacionCompraUblBuilder liquidacionBuilder,
 			IOptions<FacturacionSettings> options)
 		{
 			_conexion = conexion;
 			_facturacionSunatService = facturacionSunatService;
 			_pdfLocalService = pdfLocalService;
+			_boletaBuilder = boletaBuilder;
+			_facturaBuilder = facturaBuilder;
+			_notaCreditoBuilder = notaCreditoBuilder;
+			_notaDebitoBuilder = notaDebitoBuilder;
+			_liquidacionBuilder = liquidacionBuilder;
 			_settings = options.Value;
 		}
 
@@ -154,6 +172,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 						FechaEmision = Convert.ToDateTime(dr["IssueDate"]).ToString("yyyy-MM-dd"),
 						Cliente = clienteNombre,
 						DocumentoCliente = clienteDocumento,
+						Moneda = dr["Currency"]?.ToString() ?? "PEN",
 						Subtotal = dr["Subtotal"] == DBNull.Value ? 0 : Convert.ToDecimal(dr["Subtotal"]),
 						Igv = dr["Igv"] == DBNull.Value ? 0 : Convert.ToDecimal(dr["Igv"]),
 						Total = dr["Total"] == DBNull.Value ? 0 : Convert.ToDecimal(dr["Total"]),
@@ -462,6 +481,448 @@ namespace ApiLinaAgbd.Services.Facturacion
 			await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, Guid.Parse(voucher.Id), "VOID", resultado, anuladoInicioUtc);
 
 			return await ObtenerPorIdAsync(id);
+		}
+
+		public async Task<ComprobanteVentaListItemDto> ReenviarAsync(string id)
+		{
+			var voucher = await ObtenerDetalleAsync(id);
+			if (string.Equals(voucher.Estado, "ANULADO", StringComparison.OrdinalIgnoreCase) &&
+				string.Equals(voucher.EstadoSunat, "ANULADO", StringComparison.OrdinalIgnoreCase))
+			{
+				throw new InvalidOperationException("El comprobante ya fue anulado y confirmado por SUNAT.");
+			}
+
+			var estadoSunat = (voucher.EstadoSunat ?? string.Empty).Trim().ToUpperInvariant();
+			if (estadoSunat is not ("PENDIENTE" or "EXCEPCION" or "NO_ENVIADO"))
+			{
+				throw new InvalidOperationException("Solo se pueden reenviar documentos pendientes o con excepción.");
+			}
+
+			var solicitudUtc = DateTime.UtcNow;
+			object body = voucher.Tipo switch
+			{
+				"BOLETA" => _boletaBuilder.Build(CrearBoletaRequest(voucher)),
+				"FACTURA" => _facturaBuilder.Build(CrearFacturaRequest(voucher)),
+				_ => throw new InvalidOperationException($"El tipo {voucher.Tipo} no admite reenvío.")
+			};
+
+			if (voucher.Tipo == "NOTA_CREDITO")
+			{
+				body = await CrearNotaCreditoAsync(voucher);
+			}
+			else if (voucher.Tipo == "NOTA_DEBITO")
+			{
+				body = await CrearNotaDebitoAsync(voucher);
+			}
+			else if (voucher.Tipo == "LIQUIDACION_COMPRA")
+			{
+				body = await CrearLiquidacionAsync(voucher);
+			}
+
+			var fileName = voucher.FileName ?? $"{_settings.Emisor.Ruc}-{ObtenerTipoSunatDoc(voucher.Tipo)}-{voucher.Serie}-{voucher.Numero}";
+			var envio = await _facturacionSunatService.EnviarDocumento(fileName, body);
+			var voucherId = Guid.Parse(voucher.Id);
+
+			using var con = _conexion.ObtenerConexion();
+			await con.OpenAsync();
+
+			if (!FacturacionVoucherHelper.FueRecibidoPorApi(envio))
+			{
+				await FacturacionVoucherHelper.ActualizarVoucherPostFalloComunicacionAsync(con, voucherId);
+				await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", envio, solicitudUtc);
+				throw new InvalidOperationException(envio.DetalleError ?? envio.MensajeSunat ?? envio.Mensaje);
+			}
+
+			await FacturacionVoucherHelper.ActualizarVoucherPostEnvioAsync(con, voucherId, envio, _pdfLocalService);
+			await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", envio, solicitudUtc);
+
+			return await ObtenerDetalleAsync(id);
+		}
+
+		private UblInvoicePayloadDto CrearBoletaRequest(ComprobanteVentaListItemDto voucher)
+		{
+			return new UblInvoicePayloadDto
+			{
+				Serie = voucher.Serie,
+				Correlativo = voucher.Numero,
+				FechaEmision = voucher.FechaEmision,
+				HoraEmision = DateTime.Now.ToString("HH:mm:ss"),
+				Moneda = voucher.Moneda,
+				MontoEnLetras = MontoEnLetras.EnSoles(voucher.Total),
+				Cliente = new UblPartyPayloadDto
+				{
+					TipoDocumento = MapearTipoDocumentoSunat(voucher.TipoDocumentoCliente, false),
+					NumeroDocumento = string.IsNullOrWhiteSpace(voucher.DocumentoCliente) ? "-" : voucher.DocumentoCliente,
+					Nombre = string.IsNullOrWhiteSpace(voucher.Cliente) ? "CLIENTES VARIOS" : voucher.Cliente,
+					Direccion = string.IsNullOrWhiteSpace(voucher.DireccionCliente) ? null : voucher.DireccionCliente
+				},
+				Totales = new UblTotalsPayloadDto
+				{
+					ValorVenta = voucher.Subtotal,
+					Igv = voucher.Igv,
+					Total = voucher.Total
+				},
+				Items = voucher.Detalle.Select(item => new UblItemPayloadDto
+				{
+					Codigo = string.IsNullOrWhiteSpace(item.Codigo) ? null : item.Codigo,
+					Descripcion = item.ProductoServicio,
+					Cantidad = item.Cantidad,
+					PrecioUnitario = item.Precio,
+					ValorVenta = item.Cantidad * item.Precio,
+					Igv = item.Igv,
+					Importe = item.Importe,
+					PrecioConIgv = item.Cantidad <= 0 ? item.Precio : item.Importe / item.Cantidad,
+					UnidadMedida = "NIU"
+				}).ToList()
+			};
+		}
+
+		private UblInvoicePayloadDto CrearFacturaRequest(ComprobanteVentaListItemDto voucher)
+		{
+			return new UblInvoicePayloadDto
+			{
+				Serie = voucher.Serie,
+				Correlativo = voucher.Numero,
+				FechaEmision = voucher.FechaEmision,
+				HoraEmision = DateTime.Now.ToString("HH:mm:ss"),
+				Moneda = voucher.Moneda,
+				MontoEnLetras = MontoEnLetras.EnSoles(voucher.Total),
+				Cliente = new UblPartyPayloadDto
+				{
+					TipoDocumento = MapearTipoDocumentoSunat(voucher.TipoDocumentoCliente, true),
+					NumeroDocumento = voucher.DocumentoCliente,
+					Nombre = voucher.Cliente,
+					Direccion = string.IsNullOrWhiteSpace(voucher.DireccionCliente) ? null : voucher.DireccionCliente
+				},
+				Totales = new UblTotalsPayloadDto
+				{
+					ValorVenta = voucher.Subtotal,
+					Igv = voucher.Igv,
+					Total = voucher.Total
+				},
+				Items = voucher.Detalle.Select(item => new UblItemPayloadDto
+				{
+					Codigo = string.IsNullOrWhiteSpace(item.Codigo) ? null : item.Codigo,
+					Descripcion = item.ProductoServicio,
+					Cantidad = item.Cantidad,
+					PrecioUnitario = item.Precio,
+					ValorVenta = item.Cantidad * item.Precio,
+					Igv = item.Igv,
+					Importe = item.Importe,
+					PrecioConIgv = item.Cantidad <= 0 ? item.Precio : item.Importe / item.Cantidad,
+					UnidadMedida = "NIU"
+				}).ToList(),
+				Pago = voucher.Pago is null
+					? null
+					: new UblPaymentPayloadDto
+					{
+						FormaPago = string.Equals(voucher.Pago.FormaPago, "CREDITO", StringComparison.OrdinalIgnoreCase) ? "Credito" : "Contado",
+						Cuotas = voucher.Pago.Cuotas.Select(cuota => new UblInstallmentPayloadDto
+						{
+							Monto = cuota.Monto,
+							FechaVencimiento = cuota.FechaVencimiento
+						}).ToList()
+					}
+			};
+		}
+
+		private async Task<UblCreditNoteDocument> CrearNotaCreditoAsync(ComprobanteVentaListItemDto voucher)
+		{
+			var (referenciaSunat, referenciaSerie, referenciaNumero, motivo) = await ObtenerDatosNotaAsync(voucher.Id);
+			var referencia = CrearReferenciaNota(voucher, referenciaSunat, referenciaSerie, referenciaNumero);
+			var request = new UblAdjustmentPayloadDto
+			{
+				Serie = voucher.Serie,
+				Correlativo = voucher.Numero,
+				FechaEmision = voucher.FechaEmision,
+				HoraEmision = DateTime.Now.ToString("HH:mm:ss"),
+				Moneda = voucher.Moneda,
+				DocumentoReferencia = new UblReferenceDocumentPayloadDto
+				{
+					Id = $"{referenciaSerie}-{referenciaNumero}",
+					TipoDocumento = referenciaSunat
+				},
+				Motivo = motivo,
+				Cliente = new UblPartyPayloadDto
+				{
+					TipoDocumento = FacturacionVoucherHelper.MapearTipoDocumentoSunat(referencia.ClienteTipoDocumento, referencia.SunatTypeCode == "01"),
+					NumeroDocumento = string.IsNullOrWhiteSpace(referencia.ClienteDocumento) ? "-" : referencia.ClienteDocumento,
+					Nombre = string.IsNullOrWhiteSpace(referencia.ClienteNombre) ? "CLIENTES VARIOS" : referencia.ClienteNombre,
+					Direccion = referencia.ClienteDireccion
+				},
+				Totales = new UblTotalsPayloadDto
+				{
+					ValorVenta = voucher.Subtotal,
+					Igv = voucher.Igv,
+					Total = voucher.Total
+				},
+				Items = voucher.Detalle.Select(item => new UblItemPayloadDto
+				{
+					Codigo = string.IsNullOrWhiteSpace(item.Codigo) ? null : item.Codigo,
+					Descripcion = item.ProductoServicio,
+					Cantidad = item.Cantidad,
+					PrecioUnitario = item.Precio,
+					ValorVenta = item.Cantidad * item.Precio,
+					Igv = item.Igv,
+					Importe = item.Importe,
+					PrecioConIgv = item.Cantidad <= 0 ? item.Precio : item.Importe / item.Cantidad,
+					UnidadMedida = "NIU"
+				}).ToList()
+			};
+
+			return _notaCreditoBuilder.Build(request, referencia);
+		}
+
+		private async Task<UblDebitNoteDocument> CrearNotaDebitoAsync(ComprobanteVentaListItemDto voucher)
+		{
+			var (referenciaSunat, referenciaSerie, referenciaNumero, motivo) = await ObtenerDatosNotaAsync(voucher.Id);
+			var referencia = CrearReferenciaNota(voucher, referenciaSunat, referenciaSerie, referenciaNumero);
+			var request = new UblAdjustmentPayloadDto
+			{
+				Serie = voucher.Serie,
+				Correlativo = voucher.Numero,
+				FechaEmision = voucher.FechaEmision,
+				HoraEmision = DateTime.Now.ToString("HH:mm:ss"),
+				Moneda = voucher.Moneda,
+				DocumentoReferencia = new UblReferenceDocumentPayloadDto
+				{
+					Id = $"{referenciaSerie}-{referenciaNumero}",
+					TipoDocumento = referenciaSunat
+				},
+				Motivo = motivo,
+				Cliente = new UblPartyPayloadDto
+				{
+					TipoDocumento = FacturacionVoucherHelper.MapearTipoDocumentoSunat(referencia.ClienteTipoDocumento, referencia.SunatTypeCode == "01"),
+					NumeroDocumento = string.IsNullOrWhiteSpace(referencia.ClienteDocumento) ? "-" : referencia.ClienteDocumento,
+					Nombre = string.IsNullOrWhiteSpace(referencia.ClienteNombre) ? "CLIENTES VARIOS" : referencia.ClienteNombre,
+					Direccion = referencia.ClienteDireccion
+				},
+				Totales = new UblTotalsPayloadDto
+				{
+					ValorVenta = voucher.Subtotal,
+					Igv = voucher.Igv,
+					Total = voucher.Total
+				},
+				Items = voucher.Detalle.Select(item => new UblItemPayloadDto
+				{
+					Codigo = string.IsNullOrWhiteSpace(item.Codigo) ? null : item.Codigo,
+					Descripcion = item.ProductoServicio,
+					Cantidad = item.Cantidad,
+					PrecioUnitario = item.Precio,
+					ValorVenta = item.Cantidad * item.Precio,
+					Igv = item.Igv,
+					Importe = item.Importe,
+					PrecioConIgv = item.Cantidad <= 0 ? item.Precio : item.Importe / item.Cantidad,
+					UnidadMedida = "NIU"
+				}).ToList()
+			};
+
+			return _notaDebitoBuilder.Build(request);
+		}
+
+		private async Task<UblInvoiceDocument> CrearLiquidacionAsync(ComprobanteVentaListItemDto voucher)
+		{
+			var ubicacion = await ObtenerUbicacionLiquidacionAsync(voucher.Id);
+			var request = new UblInvoicePayloadDto
+			{
+				Serie = voucher.Serie,
+				Correlativo = voucher.Numero,
+				FechaEmision = voucher.FechaEmision,
+				HoraEmision = DateTime.Now.ToString("HH:mm:ss"),
+				Moneda = voucher.Moneda,
+				MontoEnLetras = MontoEnLetras.EnSoles(voucher.Total),
+				Cliente = new UblPartyPayloadDto
+				{
+					TipoDocumento = FacturacionVoucherHelper.MapearTipoDocumentoSunat(voucher.TipoDocumentoCliente, false),
+					NumeroDocumento = voucher.DocumentoCliente,
+					Nombre = voucher.Cliente,
+					Direccion = ubicacion.SellerAddress.Direccion,
+					CodigoUbigeo = ubicacion.SellerAddress.CodigoUbigeo,
+					Departamento = ubicacion.SellerAddress.Departamento,
+					Provincia = ubicacion.SellerAddress.Provincia,
+					Distrito = ubicacion.SellerAddress.Distrito
+				},
+				Totales = new UblTotalsPayloadDto
+				{
+					ValorVenta = voucher.Subtotal,
+					Igv = voucher.Igv,
+					Total = voucher.Total
+				},
+				Items = voucher.Detalle.Select(item => new UblItemPayloadDto
+				{
+					Codigo = string.IsNullOrWhiteSpace(item.Codigo) ? null : item.Codigo,
+					Descripcion = item.ProductoServicio,
+					Cantidad = item.Cantidad,
+					PrecioUnitario = item.Precio,
+					ValorVenta = item.Cantidad * item.Precio,
+					Igv = item.Igv,
+					Importe = item.Importe,
+					PrecioConIgv = item.Cantidad <= 0 ? item.Precio : item.Importe / item.Cantidad,
+					UnidadMedida = "NIU"
+				}).ToList()
+			};
+
+			return _liquidacionBuilder.Build(request, ubicacion.PointOfSale);
+		}
+
+		private static NotaComprobanteBaseDisponibleDto CrearReferenciaNota(
+			ComprobanteVentaListItemDto voucher,
+			string referenciaSunat,
+			string referenciaSerie,
+			string referenciaNumero)
+		{
+			return new NotaComprobanteBaseDisponibleDto
+			{
+				Id = $"{referenciaSerie}-{referenciaNumero}",
+				Tipo = referenciaSunat == "01" ? "FACTURA" : "BOLETA",
+				SunatTypeCode = referenciaSunat,
+				Serie = referenciaSerie,
+				Numero = referenciaNumero,
+				FechaEmision = string.Empty,
+				Moneda = voucher.Moneda,
+				ClienteNombre = voucher.Cliente,
+				ClienteTipoDocumento = voucher.TipoDocumentoCliente,
+				ClienteDocumento = voucher.DocumentoCliente,
+				ClienteDireccion = voucher.DireccionCliente,
+				Subtotal = voucher.Subtotal,
+				Igv = voucher.Igv,
+				Total = voucher.Total,
+				Items = voucher.Detalle.Select(item => new NotaComprobanteBaseItemDto
+				{
+					Id = item.ItemId ?? Guid.NewGuid().ToString(),
+					ProductoId = item.ProductoId,
+					Codigo = item.Codigo,
+					Descripcion = item.ProductoServicio,
+					Cantidad = item.Cantidad,
+					PrecioUnitario = item.Precio,
+					ValorVenta = item.Cantidad * item.Precio,
+					Igv = item.Igv,
+					Importe = item.Importe,
+					UnidadMedida = "NIU"
+				}).ToList()
+			};
+		}
+
+		private async Task<(string ReferencedSunatTypeCode, string ReferencedSeries, string ReferencedNumber, UblReasonPayloadDto Motivo)> ObtenerDatosNotaAsync(string voucherId)
+		{
+			using var con = _conexion.ObtenerConexion();
+			await con.OpenAsync();
+
+			const string sql = """
+				SELECT TOP 1
+					COALESCE(adj.ReasonCode, '') AS ReasonCode,
+					COALESCE(adj.ReasonDescription, '') AS ReasonDescription,
+					COALESCE(ref.SunatTypeCode, '') AS ReferencedSunatTypeCode,
+					COALESCE(ref.Series, '') AS ReferencedSeries,
+					COALESCE(ref.Number, '') AS ReferencedNumber
+				FROM dbo.VoucherAdjustment adj
+				LEFT JOIN dbo.Voucher ref ON ref.Id = adj.ReferencedVoucherId
+				WHERE adj.VoucherId = @VoucherId;
+				""";
+
+			using var cmd = new SqlCommand(sql, con);
+			cmd.Parameters.AddWithValue("@VoucherId", voucherId);
+			using var dr = await cmd.ExecuteReaderAsync();
+			if (!await dr.ReadAsync())
+			{
+				throw new InvalidOperationException("La nota no tiene motivo o comprobante de referencia registrado.");
+			}
+
+			return (
+				dr["ReferencedSunatTypeCode"]?.ToString() ?? string.Empty,
+				dr["ReferencedSeries"]?.ToString() ?? string.Empty,
+				dr["ReferencedNumber"]?.ToString() ?? string.Empty,
+				new UblReasonPayloadDto
+				{
+					Codigo = dr["ReasonCode"]?.ToString() ?? string.Empty,
+					Descripcion = dr["ReasonDescription"]?.ToString() ?? string.Empty
+				});
+		}
+
+		private static string ObtenerTipoSunatDoc(string tipo) =>
+			tipo switch
+			{
+				"BOLETA" => "03",
+				"FACTURA" => "01",
+				"NOTA_CREDITO" => "07",
+				"NOTA_DEBITO" => "08",
+				"LIQUIDACION_COMPRA" => "04",
+				_ => "00"
+			};
+
+		private static string MapearTipoDocumentoSunat(string tipoDocumento, bool esFactura)
+		{
+			if (esFactura)
+			{
+				return "6";
+			}
+
+			return (tipoDocumento ?? string.Empty).Trim().ToUpperInvariant() switch
+			{
+				"DNI" => "1",
+				"RUC" => "6",
+				"CE" => "4",
+				"PASAPORTE" => "7",
+				_ => "-"
+			};
+		}
+
+		private async Task<(LiquidacionCompraUbicacionDto SellerAddress, LiquidacionCompraUbicacionDto PointOfSale)> ObtenerUbicacionLiquidacionAsync(string voucherId)
+		{
+			using var con = _conexion.ObtenerConexion();
+			await con.OpenAsync();
+
+			const string sql = """
+				SELECT
+					vl.LocationType,
+					vl.DistrictId,
+					vl.Address,
+					vl.EstablishmentCode,
+					di.codigo_ubigeo,
+					di.nombre AS Distrito,
+					pv.nombre AS Provincia,
+					dep.nombre AS Departamento
+				FROM dbo.VoucherLocation vl
+				LEFT JOIN dbo.distrito di ON di.id = vl.DistrictId
+				LEFT JOIN dbo.provincia pv ON pv.id = di.idprovincia
+				LEFT JOIN dbo.departamento dep ON dep.id = pv.iddepartamento
+				WHERE vl.VoucherId = @VoucherId
+				  AND vl.LocationType IN ('SELLER_ADDRESS', 'POINT_OF_SALE');
+				""";
+
+			using var cmd = new SqlCommand(sql, con);
+			cmd.Parameters.AddWithValue("@VoucherId", Guid.Parse(voucherId));
+			using var dr = await cmd.ExecuteReaderAsync();
+			LiquidacionCompraUbicacionDto? seller = null;
+			LiquidacionCompraUbicacionDto? point = null;
+
+			while (await dr.ReadAsync())
+			{
+				var ubicacion = new LiquidacionCompraUbicacionDto
+				{
+					DistritoId = Convert.ToInt32(dr["DistrictId"]),
+					Direccion = dr["Address"]?.ToString() ?? string.Empty,
+					CodigoEstablecimiento = dr["EstablishmentCode"]?.ToString(),
+					CodigoUbigeo = dr["codigo_ubigeo"]?.ToString(),
+					Departamento = dr["Departamento"]?.ToString(),
+					Provincia = dr["Provincia"]?.ToString(),
+					Distrito = dr["Distrito"]?.ToString()
+				};
+
+				var locationType = dr["LocationType"]?.ToString() ?? string.Empty;
+				if (string.Equals(locationType, "SELLER_ADDRESS", StringComparison.OrdinalIgnoreCase))
+				{
+					seller = ubicacion;
+				}
+				else if (string.Equals(locationType, "POINT_OF_SALE", StringComparison.OrdinalIgnoreCase))
+				{
+					point = ubicacion;
+				}
+			}
+
+			return (
+				seller ?? throw new InvalidOperationException("No se encontró la ubicación del vendedor para la liquidación."),
+				point ?? throw new InvalidOperationException("No se encontró el punto de venta para la liquidación."));
 		}
 
 		private static string ResolverDocumentoReferencia(SqlDataReader dr)

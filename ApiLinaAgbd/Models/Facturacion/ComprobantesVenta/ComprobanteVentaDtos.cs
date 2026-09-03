@@ -114,6 +114,8 @@ namespace ApiLinaAgbd.Models.Facturacion.ComprobantesVenta
 
 		public string FechaEmision { get; set; } = string.Empty;
 
+		public string Moneda { get; set; } = "PEN";
+
 		public string Cliente { get; set; } = string.Empty;
 
 		public string DocumentoCliente { get; set; } = string.Empty;

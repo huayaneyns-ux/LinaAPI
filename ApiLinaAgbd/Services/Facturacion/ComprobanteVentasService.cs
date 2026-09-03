@@ -85,7 +85,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 					FROM dbo.Voucher vx
 					WHERE vx.VentaId = v.id
 					  AND vx.SunatTypeCode IN ('01', '03')
-					  AND ISNULL(vx.SunatStatus, 'NO_ENVIADO') IN ('NO_ENVIADO', 'PENDIENTE', 'ACEPTADO')
+					  AND ISNULL(vx.SunatStatus, 'NO_ENVIADO') IN ('NO_ENVIADO', 'PENDIENTE', 'ACEPTADO', 'EXCEPCION')
 				)
 				ORDER BY v.id DESC, dv.id ASC;";
 
@@ -251,6 +251,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 						Serie = dr["Series"]?.ToString() ?? string.Empty,
 						Numero = dr["Number"]?.ToString() ?? string.Empty,
 						FechaEmision = Convert.ToDateTime(dr["IssueDate"]).ToString("yyyy-MM-dd"),
+						Moneda = dr["Currency"]?.ToString() ?? "PEN",
 						Cliente = dr["ClienteNombre"]?.ToString() ?? string.Empty,
 						DocumentoCliente = dr["ClienteDocumento"]?.ToString() ?? string.Empty,
 						Subtotal = dr["Subtotal"] == DBNull.Value ? 0 : Convert.ToDecimal(dr["Subtotal"]),
@@ -529,9 +530,10 @@ namespace ApiLinaAgbd.Services.Facturacion
 
 			if (!FacturacionVoucherHelper.FueRecibidoPorApi(envio))
 			{
-				using var conLimpieza = _conexion.ObtenerConexion();
-				await conLimpieza.OpenAsync();
-				await FacturacionVoucherHelper.EliminarVoucherAsync(conLimpieza, voucherId);
+				using var conFallo = _conexion.ObtenerConexion();
+				await conFallo.OpenAsync();
+				await FacturacionVoucherHelper.ActualizarVoucherPostFalloComunicacionAsync(conFallo, voucherId);
+				await RegistrarTransmisionAsync(conFallo, voucherId.ToString(), "SEND", envio, solicitudUtc);
 				throw new InvalidOperationException(envio.DetalleError ?? envio.MensajeSunat ?? envio.Mensaje);
 			}
 

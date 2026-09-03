@@ -134,6 +134,20 @@ namespace ApiLinaAgbd.Controllers.Facturacion
 			}
 		}
 
+		[HttpPost("comprobantes/{id}/reenviar-sunat")]
+		public async Task<IActionResult> ReenviarDocumentoSunat(string id)
+		{
+			try
+			{
+				var comprobante = await _documentoFacturacionService.ReenviarAsync(id);
+				return Ok(comprobante);
+			}
+			catch (InvalidOperationException ex)
+			{
+				return BadRequest(new { mensaje = ex.Message });
+			}
+		}
+
 		[HttpGet("comprobantes/ventas/{id}/pdf")]
 		public async Task<IActionResult> DescargarPdfComprobanteVenta(string id, [FromQuery] string format = "A4")
 		{

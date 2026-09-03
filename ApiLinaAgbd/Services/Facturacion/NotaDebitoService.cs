@@ -115,9 +115,10 @@ namespace ApiLinaAgbd.Services.Facturacion
 
 			if (!FacturacionVoucherHelper.FueRecibidoPorApi(envio))
 			{
-				using var conLimpieza = _conexion.ObtenerConexion();
-				await conLimpieza.OpenAsync();
-				await FacturacionVoucherHelper.EliminarVoucherAsync(conLimpieza, voucherId);
+				using var conFallo = _conexion.ObtenerConexion();
+				await conFallo.OpenAsync();
+				await FacturacionVoucherHelper.ActualizarVoucherPostFalloComunicacionAsync(conFallo, voucherId);
+				await FacturacionVoucherHelper.RegistrarTransmisionAsync(conFallo, voucherId, "SEND", envio, solicitudUtc);
 				throw new InvalidOperationException(envio.DetalleError ?? envio.MensajeSunat ?? envio.Mensaje);
 			}
 
