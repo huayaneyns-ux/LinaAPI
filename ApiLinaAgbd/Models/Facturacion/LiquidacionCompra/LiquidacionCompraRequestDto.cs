@@ -72,6 +72,8 @@ namespace ApiLinaAgbd.Models.Facturacion.LiquidacionCompra
 		public string NumeroDocumento { get; set; } = string.Empty;
 
 		public string Nombre { get; set; } = string.Empty;
+
+		public string? NombreContacto { get; set; }
 	}
 
 	public class LiquidacionCompraUbicacionDisponibleDto

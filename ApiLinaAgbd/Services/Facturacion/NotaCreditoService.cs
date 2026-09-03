@@ -19,17 +19,20 @@ namespace ApiLinaAgbd.Services.Facturacion
 		private readonly Conexion _conexion;
 		private readonly NotaCreditoUblBuilder _builder;
 		private readonly FacturacionSunatService _facturacionSunatService;
+		private readonly FacturacionPdfLocalService _pdfLocalService;
 		private readonly FacturacionSettings _settings;
 
 		public NotaCreditoService(
 			Conexion conexion,
 			NotaCreditoUblBuilder builder,
 			FacturacionSunatService facturacionSunatService,
+			FacturacionPdfLocalService pdfLocalService,
 			IOptions<FacturacionSettings> options)
 		{
 			_conexion = conexion;
 			_builder = builder;
 			_facturacionSunatService = facturacionSunatService;
+			_pdfLocalService = pdfLocalService;
 			_settings = options.Value;
 		}
 
@@ -237,7 +240,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			using (var con = _conexion.ObtenerConexion())
 			{
 				await con.OpenAsync();
-				await FacturacionVoucherHelper.ActualizarVoucherPostEnvioAsync(con, voucherId, envio);
+				await FacturacionVoucherHelper.ActualizarVoucherPostEnvioAsync(con, voucherId, envio, _pdfLocalService);
 				await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", envio);
 			}
 

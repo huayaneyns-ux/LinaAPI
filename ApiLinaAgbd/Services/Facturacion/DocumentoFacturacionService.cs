@@ -14,15 +14,18 @@ namespace ApiLinaAgbd.Services.Facturacion
 	{
 		private readonly Conexion _conexion;
 		private readonly FacturacionSunatService _facturacionSunatService;
+		private readonly FacturacionPdfLocalService _pdfLocalService;
 		private readonly FacturacionSettings _settings;
 
 		public DocumentoFacturacionService(
 			Conexion conexion,
 			FacturacionSunatService facturacionSunatService,
+			FacturacionPdfLocalService pdfLocalService,
 			IOptions<FacturacionSettings> options)
 		{
 			_conexion = conexion;
 			_facturacionSunatService = facturacionSunatService;
+			_pdfLocalService = pdfLocalService;
 			_settings = options.Value;
 		}
 
@@ -379,33 +382,48 @@ namespace ApiLinaAgbd.Services.Facturacion
 
 		public async Task<(byte[] Content, string ContentType, string FileName)> DescargarPdfAsync(string id, string format)
 		{
-			var voucher = await ObtenerDetalleAsync(id);
-			if (string.IsNullOrWhiteSpace(voucher.DocumentId))
-			{
-				throw new InvalidOperationException("El documento no tiene documentId registrado en APISUNAT.");
-			}
-
 			var formato = (format ?? string.Empty).Trim();
 			if (formato is not ("A4" or "A5" or "ticket58mm" or "ticket80mm"))
 			{
 				throw new InvalidOperationException("El formato PDF solicitado no es válido.");
 			}
 
-			var tipoCode = voucher.Tipo switch
+			using var con = _conexion.ObtenerConexion();
+			await con.OpenAsync();
+
+			const string sql = """
+				SELECT
+					v.SunatTypeCode,
+					v.Series,
+					v.Number,
+					v.PdfA4Url,
+					v.PdfA5Url,
+					v.Pdf58mmUrl,
+					v.Pdf80mmUrl
+				FROM dbo.Voucher v
+				WHERE v.Id = @Id;
+				""";
+
+			using var cmd = new SqlCommand(sql, con);
+			cmd.Parameters.AddWithValue("@Id", Guid.Parse(id));
+			using var dr = await cmd.ExecuteReaderAsync();
+			if (!await dr.ReadAsync())
 			{
-				"FACTURA" => "01",
-				"BOLETA" => "03",
-				"LIQUIDACION_COMPRA" => "04",
-				"NOTA_CREDITO" => "07",
-				"NOTA_DEBITO" => "08",
-				_ => "00"
+				throw new InvalidOperationException("No se encontró el documento solicitado.");
+			}
+
+			var tipoCode = dr["SunatTypeCode"]?.ToString() ?? "00";
+			var fileName = $"{_settings.Emisor.Ruc}-{tipoCode}-{dr["Series"]}-{dr["Number"]}";
+			var storedUrl = formato switch
+			{
+				"A4" => dr["PdfA4Url"] == DBNull.Value ? null : dr["PdfA4Url"].ToString(),
+				"A5" => dr["PdfA5Url"] == DBNull.Value ? null : dr["PdfA5Url"].ToString(),
+				"ticket58mm" => dr["Pdf58mmUrl"] == DBNull.Value ? null : dr["Pdf58mmUrl"].ToString(),
+				"ticket80mm" => dr["Pdf80mmUrl"] == DBNull.Value ? null : dr["Pdf80mmUrl"].ToString(),
+				_ => null
 			};
 
-			var fileName = string.IsNullOrWhiteSpace(voucher.FileName)
-				? $"{_settings.Emisor.Ruc}-{tipoCode}-{voucher.Serie}-{voucher.Numero}"
-				: voucher.FileName;
-
-			return await _facturacionSunatService.DescargarPdf(voucher.DocumentId, formato, fileName);
+			return await _pdfLocalService.LeerPdfLocalAsync(storedUrl, fileName);
 		}
 
 		public async Task<DocumentoFacturacionDto> AnularAsync(string id, string reason)
@@ -523,8 +541,6 @@ namespace ApiLinaAgbd.Services.Facturacion
 					t.SunatStatus,
 					t.SunatDocumentId,
 					t.ErrorMessage,
-					t.IsRetryable,
-					t.NextRetryAt,
 					t.RespondedAt,
 					t.CreatedAt,
 					CASE
@@ -536,10 +552,10 @@ namespace ApiLinaAgbd.Services.Facturacion
 					v.Series,
 					v.Number,
 					v.Total,
-					COALESCE(cust.LegalName, v.IssuerLegalName, '') AS CustomerName
+					COALESCE(cust.Name, v.IssuerLegalName, '') AS CustomerName
 				FROM dbo.SunatTransmission t
 				INNER JOIN dbo.Voucher v ON v.Id = t.VoucherId
-				LEFT JOIN dbo.VoucherParty cust ON cust.VoucherId = v.Id AND cust.PartyType = 'CUSTOMER'
+				LEFT JOIN dbo.VoucherParty cust ON cust.VoucherId = v.Id AND cust.Role = 'CUSTOMER'
 				ORDER BY t.CreatedAt DESC, t.AttemptNumber DESC;
 				""";
 
@@ -559,8 +575,6 @@ namespace ApiLinaAgbd.Services.Facturacion
 					SunatStatus = dr.IsDBNull(dr.GetOrdinal("SunatStatus")) ? null : dr["SunatStatus"]?.ToString(),
 					SunatDocumentId = dr.IsDBNull(dr.GetOrdinal("SunatDocumentId")) ? null : dr["SunatDocumentId"]?.ToString(),
 					ErrorMessage = dr.IsDBNull(dr.GetOrdinal("ErrorMessage")) ? null : dr["ErrorMessage"]?.ToString(),
-					IsRetryable = !dr.IsDBNull(dr.GetOrdinal("IsRetryable")) && dr.GetBoolean(dr.GetOrdinal("IsRetryable")),
-					NextRetryAt = dr.IsDBNull(dr.GetOrdinal("NextRetryAt")) ? null : dr.GetDateTime(dr.GetOrdinal("NextRetryAt")),
 					RespondedAt = dr.IsDBNull(dr.GetOrdinal("RespondedAt")) ? null : dr.GetDateTime(dr.GetOrdinal("RespondedAt")),
 					CreatedAt = dr.GetDateTime(dr.GetOrdinal("CreatedAt")),
 					ResponseTimeMs = dr.IsDBNull(dr.GetOrdinal("ResponseTimeMs")) ? null : Convert.ToInt32(dr["ResponseTimeMs"]),

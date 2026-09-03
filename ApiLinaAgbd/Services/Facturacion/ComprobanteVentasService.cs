@@ -19,6 +19,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 		private readonly BoletaUblBuilder _boletaBuilder;
 		private readonly FacturaUblBuilder _facturaBuilder;
 		private readonly FacturacionSunatService _facturacionSunatService;
+		private readonly FacturacionPdfLocalService _pdfLocalService;
 		private readonly FacturacionSettings _settings;
 
 		public ComprobanteVentasService(
@@ -26,12 +27,14 @@ namespace ApiLinaAgbd.Services.Facturacion
 			BoletaUblBuilder boletaBuilder,
 			FacturaUblBuilder facturaBuilder,
 			FacturacionSunatService facturacionSunatService,
+			FacturacionPdfLocalService pdfLocalService,
 			Microsoft.Extensions.Options.IOptions<FacturacionSettings> options)
 		{
 			_conexion = conexion;
 			_boletaBuilder = boletaBuilder;
 			_facturaBuilder = facturaBuilder;
 			_facturacionSunatService = facturacionSunatService;
+			_pdfLocalService = pdfLocalService;
 			_settings = options.Value;
 		}
 
@@ -384,23 +387,47 @@ namespace ApiLinaAgbd.Services.Facturacion
 
 		public async Task<(byte[] Content, string ContentType, string FileName)> DescargarPdfAsync(string id, string format)
 		{
-			var voucher = await ObtenerComprobantePorIdAsync(id);
-			if (string.IsNullOrWhiteSpace(voucher.DocumentId))
-			{
-				throw new InvalidOperationException("El comprobante no tiene documentId registrado en APISUNAT.");
-			}
-
 			var formato = (format ?? string.Empty).Trim();
 			if (formato is not ("A4" or "A5" or "ticket58mm" or "ticket80mm"))
 			{
 				throw new InvalidOperationException("El formato PDF solicitado no es válido.");
 			}
 
-			var fileName = string.IsNullOrWhiteSpace(voucher.FileName)
-				? $"{_settings.Emisor.Ruc}-{(voucher.Tipo == "FACTURA" ? TipoFacturaSunat : TipoBoletaSunat)}-{voucher.Serie}-{voucher.Numero}"
-				: voucher.FileName;
+			using var con = _conexion.ObtenerConexion();
+			await con.OpenAsync();
 
-			return await _facturacionSunatService.DescargarPdf(voucher.DocumentId, formato, fileName);
+			const string sql = """
+				SELECT
+					v.SunatTypeCode,
+					v.Series,
+					v.Number,
+					v.PdfA4Url,
+					v.PdfA5Url,
+					v.Pdf58mmUrl,
+					v.Pdf80mmUrl
+				FROM dbo.Voucher v
+				WHERE v.Id = @Id;
+				""";
+
+			using var cmd = new SqlCommand(sql, con);
+			cmd.Parameters.AddWithValue("@Id", Guid.Parse(id));
+			using var dr = await cmd.ExecuteReaderAsync();
+			if (!await dr.ReadAsync())
+			{
+				throw new InvalidOperationException("No se encontró el comprobante solicitado.");
+			}
+
+			var fileName = $"{_settings.Emisor.Ruc}-{dr["SunatTypeCode"]}-{dr["Series"]}-{dr["Number"]}";
+			var storedUrl = formato switch
+			{
+				"A4" => dr["PdfA4Url"] == DBNull.Value ? null : dr["PdfA4Url"].ToString(),
+				"A5" => dr["PdfA5Url"] == DBNull.Value ? null : dr["PdfA5Url"].ToString(),
+				"ticket58mm" => dr["Pdf58mmUrl"] == DBNull.Value ? null : dr["Pdf58mmUrl"].ToString(),
+				"ticket80mm" => dr["Pdf80mmUrl"] == DBNull.Value ? null : dr["Pdf80mmUrl"].ToString(),
+				_ => null
+			};
+
+			return await _pdfLocalService.LeerPdfLocalAsync(storedUrl, fileName);
 		}
 
 		public async Task<ComprobanteVentaListItemDto> AnularAsync(string id, string reason)
@@ -855,6 +882,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 				""";
 
 			var urlsPdf = ExtraerUrlsPdf(envio.RespuestaApi);
+			var urlsPdfLocales = await _pdfLocalService.GuardarDesdeUrlsAsync(voucherId, urlsPdf);
 			var sunatStatus = NormalizarSunatStatusParaVoucher(envio);
 			using var cmd = new SqlCommand(sql, con);
 			cmd.Parameters.AddWithValue("@Id", voucherId);
@@ -862,10 +890,10 @@ namespace ApiLinaAgbd.Services.Facturacion
 			cmd.Parameters.AddWithValue("@SunatDocumentId", (object?)envio.DocumentId ?? DBNull.Value);
 			cmd.Parameters.AddWithValue("@XmlUrl", (object?)envio.XmlUrl ?? DBNull.Value);
 			cmd.Parameters.AddWithValue("@CdrUrl", (object?)envio.CdrUrl ?? DBNull.Value);
-			cmd.Parameters.AddWithValue("@PdfA4Url", (object?)urlsPdf.A4 ?? DBNull.Value);
-			cmd.Parameters.AddWithValue("@PdfA5Url", (object?)urlsPdf.A5 ?? DBNull.Value);
-			cmd.Parameters.AddWithValue("@Pdf58mmUrl", (object?)urlsPdf.Ticket58 ?? DBNull.Value);
-			cmd.Parameters.AddWithValue("@Pdf80mmUrl", (object?)urlsPdf.Ticket80 ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@PdfA4Url", (object?)urlsPdfLocales.A4 ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@PdfA5Url", (object?)urlsPdfLocales.A5 ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@Pdf58mmUrl", (object?)urlsPdfLocales.Ticket58 ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@Pdf80mmUrl", (object?)urlsPdfLocales.Ticket80 ?? DBNull.Value);
 			await cmd.ExecuteNonQueryAsync();
 		}
 

@@ -13,8 +13,6 @@ namespace ApiLinaAgbd.Models.Facturacion.SunatTransmission
 		public string? SunatStatus { get; set; }
 		public string? SunatDocumentId { get; set; }
 		public string? ErrorMessage { get; set; }
-		public bool IsRetryable { get; set; }
-		public DateTime? NextRetryAt { get; set; }
 		public DateTime? RespondedAt { get; set; }
 		public DateTime CreatedAt { get; set; }
 		public int? ResponseTimeMs { get; set; }

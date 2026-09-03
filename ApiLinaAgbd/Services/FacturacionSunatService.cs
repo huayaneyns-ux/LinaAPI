@@ -234,6 +234,26 @@ namespace ApiLinaAgbd.Services
 			return (contenido, contentType, $"{fileName}.pdf");
 		}
 
+		public async Task<(byte[] Content, string ContentType)> DescargarContenidoAsync(string url)
+		{
+			if (string.IsNullOrWhiteSpace(url))
+			{
+				throw new InvalidOperationException("La URL del archivo está vacía.");
+			}
+
+			using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+			if (!response.IsSuccessStatusCode)
+			{
+				var cuerpo = await response.Content.ReadAsStringAsync();
+				throw new InvalidOperationException(
+					$"No se pudo descargar el archivo desde APISUNAT. HTTP {(int)response.StatusCode}: {Truncar(cuerpo, 500)}");
+			}
+
+			var contenido = await response.Content.ReadAsByteArrayAsync();
+			var contentType = response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
+			return (contenido, contentType);
+		}
+
 		public async Task<FacturacionEnvioResultado> AnularDocumento(string documentId, string reason)
 		{
 			if (string.IsNullOrWhiteSpace(_settings.PersonaId) ||

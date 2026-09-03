@@ -8,8 +8,6 @@ namespace ApiLinaAgbd.Services.Facturacion
 {
 	internal static class FacturacionVoucherHelper
 	{
-		private static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(5);
-
 		internal static DateTime ParsearFechaObligatoria(string? fechaTexto, string mensaje)
 		{
 			if (!DateTime.TryParse(fechaTexto, CultureInfo.InvariantCulture, DateTimeStyles.None, out var fecha))
@@ -94,11 +92,6 @@ namespace ApiLinaAgbd.Services.Facturacion
 				_ => envio.Exitoso ? "PENDIENTE" : "EXCEPCION"
 			};
 		}
-
-		internal static bool EsRetryable(FacturacionEnvioResultado resultado) =>
-			resultado.StatusCode == StatusCodes.Status502BadGateway ||
-			resultado.StatusCode == StatusCodes.Status503ServiceUnavailable ||
-			resultado.StatusCode == StatusCodes.Status504GatewayTimeout;
 
 		internal static bool FueRecibidoPorApi(FacturacionEnvioResultado resultado) =>
 			resultado.Exitoso;
@@ -329,8 +322,6 @@ namespace ApiLinaAgbd.Services.Facturacion
 		{
 			var nextAttempt = await ObtenerSiguienteIntentoAsync(con, voucherId, operationType);
 			var transmissionId = Guid.NewGuid();
-			var isRetryable = EsRetryable(resultado);
-			var nextRetryAt = isRetryable ? DateTime.UtcNow.Add(RetryDelay) : (DateTime?)null;
 
 			const string sql = """
 				INSERT INTO dbo.SunatTransmission
@@ -344,8 +335,6 @@ namespace ApiLinaAgbd.Services.Facturacion
 					SunatStatus,
 					SunatDocumentId,
 					ErrorMessage,
-					IsRetryable,
-					NextRetryAt,
 					RespondedAt
 				)
 				VALUES
@@ -359,8 +348,6 @@ namespace ApiLinaAgbd.Services.Facturacion
 					@SunatStatus,
 					@SunatDocumentId,
 					@ErrorMessage,
-					@IsRetryable,
-					@NextRetryAt,
 					@RespondedAt
 				);
 				""";
@@ -375,15 +362,17 @@ namespace ApiLinaAgbd.Services.Facturacion
 			cmd.Parameters.Add("@SunatStatus", SqlDbType.VarChar, 30).Value = NormalizarSunatStatusParaVoucher(resultado);
 			cmd.Parameters.AddWithValue("@SunatDocumentId", (object?)resultado.DocumentId ?? DBNull.Value);
 			cmd.Parameters.AddWithValue("@ErrorMessage", (object?)ObtenerResumenTransmision(resultado) ?? DBNull.Value);
-			cmd.Parameters.AddWithValue("@IsRetryable", isRetryable);
-			cmd.Parameters.AddWithValue("@NextRetryAt", (object?)nextRetryAt ?? DBNull.Value);
 			cmd.Parameters.AddWithValue("@RespondedAt", DateTime.UtcNow);
 			await cmd.ExecuteNonQueryAsync();
 			await InsertarMensajesTransmisionAsync(con, transmissionId, resultado.RespuestaApi, "faults", "dbo.SunatTransmissionFault");
 			await InsertarMensajesTransmisionAsync(con, transmissionId, resultado.RespuestaApi, "notes", "dbo.SunatTransmissionNote");
 		}
 
-		internal static async Task ActualizarVoucherPostEnvioAsync(SqlConnection con, Guid voucherId, FacturacionEnvioResultado envio)
+		internal static async Task ActualizarVoucherPostEnvioAsync(
+			SqlConnection con,
+			Guid voucherId,
+			FacturacionEnvioResultado envio,
+			FacturacionPdfLocalService pdfLocalService)
 		{
 			const string sql = """
 				UPDATE dbo.Voucher
@@ -404,16 +393,17 @@ namespace ApiLinaAgbd.Services.Facturacion
 				""";
 
 			var urlsPdf = ExtraerUrlsPdf(envio.RespuestaApi);
+			var urlsPdfLocales = await pdfLocalService.GuardarDesdeUrlsAsync(voucherId, urlsPdf);
 			using var cmd = new SqlCommand(sql, con);
 			cmd.Parameters.AddWithValue("@Id", voucherId);
 			cmd.Parameters.Add("@SunatStatus", SqlDbType.VarChar, 30).Value = NormalizarSunatStatusParaVoucher(envio);
 			cmd.Parameters.AddWithValue("@SunatDocumentId", (object?)envio.DocumentId ?? DBNull.Value);
 			cmd.Parameters.AddWithValue("@XmlUrl", (object?)envio.XmlUrl ?? DBNull.Value);
 			cmd.Parameters.AddWithValue("@CdrUrl", (object?)envio.CdrUrl ?? DBNull.Value);
-			cmd.Parameters.AddWithValue("@PdfA4Url", (object?)urlsPdf.A4 ?? DBNull.Value);
-			cmd.Parameters.AddWithValue("@PdfA5Url", (object?)urlsPdf.A5 ?? DBNull.Value);
-			cmd.Parameters.AddWithValue("@Pdf58mmUrl", (object?)urlsPdf.Ticket58 ?? DBNull.Value);
-			cmd.Parameters.AddWithValue("@Pdf80mmUrl", (object?)urlsPdf.Ticket80 ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@PdfA4Url", (object?)urlsPdfLocales.A4 ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@PdfA5Url", (object?)urlsPdfLocales.A5 ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@Pdf58mmUrl", (object?)urlsPdfLocales.Ticket58 ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@Pdf80mmUrl", (object?)urlsPdfLocales.Ticket80 ?? DBNull.Value);
 			await cmd.ExecuteNonQueryAsync();
 		}
 

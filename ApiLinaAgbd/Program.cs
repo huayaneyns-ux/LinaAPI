@@ -35,6 +35,7 @@ builder.Services.AddSingleton<Conexion>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddScoped<CloudinaryService>();
+builder.Services.AddHttpContextAccessor();
 
 builder.Services.Configure<FacturacionSettings>(
 	builder.Configuration.GetSection(FacturacionSettings.SectionName));
@@ -52,6 +53,7 @@ builder.Services.AddHttpClient<FacturacionSunatService>((sp, client) =>
 
 builder.Services.AddScoped<BoletaUblBuilder>();
 builder.Services.AddScoped<ComprobanteVentasService>();
+builder.Services.AddScoped<FacturacionPdfLocalService>();
 builder.Services.AddScoped<DocumentoFacturacionService>();
 builder.Services.AddScoped<FacturaUblBuilder>();
 builder.Services.AddScoped<LiquidacionCompraUblBuilder>();
@@ -81,6 +83,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseStaticFiles();
 
 // Activar CORS
 app.UseCors("ReactPolicy");

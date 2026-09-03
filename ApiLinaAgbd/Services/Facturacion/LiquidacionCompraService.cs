@@ -16,17 +16,20 @@ namespace ApiLinaAgbd.Services.Facturacion
 		private readonly Conexion _conexion;
 		private readonly LiquidacionCompraUblBuilder _builder;
 		private readonly FacturacionSunatService _facturacionSunatService;
+		private readonly FacturacionPdfLocalService _pdfLocalService;
 		private readonly FacturacionSettings _settings;
 
 		public LiquidacionCompraService(
 			Conexion conexion,
 			LiquidacionCompraUblBuilder builder,
 			FacturacionSunatService facturacionSunatService,
+			FacturacionPdfLocalService pdfLocalService,
 			IOptions<FacturacionSettings> options)
 		{
 			_conexion = conexion;
 			_builder = builder;
 			_facturacionSunatService = facturacionSunatService;
+			_pdfLocalService = pdfLocalService;
 			_settings = options.Value;
 		}
 
@@ -43,6 +46,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 					c.fecha_compra,
 					pr.ruc,
 					pr.razon_social,
+					pr.nombre_contacto AS NombreContacto,
 					dir.id_distrito AS DistritoId,
 					dir.nombre_direccion AS Direccion,
 					di.nombre AS Distrito,
@@ -89,7 +93,8 @@ namespace ApiLinaAgbd.Services.Facturacion
 						{
 							TipoDocumento = "RUC",
 							NumeroDocumento = dr["ruc"]?.ToString() ?? string.Empty,
-							Nombre = dr["razon_social"]?.ToString() ?? string.Empty
+							Nombre = dr["razon_social"]?.ToString() ?? string.Empty,
+							NombreContacto = dr["NombreContacto"]?.ToString()
 						},
 						UbicacionVendedor = dr["DistritoId"] == DBNull.Value
 							? null
@@ -245,7 +250,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			using (var con = _conexion.ObtenerConexion())
 			{
 				await con.OpenAsync();
-				await FacturacionVoucherHelper.ActualizarVoucherPostEnvioAsync(con, voucherId, envio);
+				await FacturacionVoucherHelper.ActualizarVoucherPostEnvioAsync(con, voucherId, envio, _pdfLocalService);
 				await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", envio);
 			}
 
