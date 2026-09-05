@@ -1,7 +1,7 @@
 using ApiLinaAgbd.Models.Facturacion;
-using ApiLinaAgbd.Models.Facturacion.NotaDebito;
 using ApiLinaAgbd.Models.Facturacion.Ubl;
 using Microsoft.Extensions.Options;
+using static ApiLinaAgbd.Services.Facturacion.MontoEnLetras;
 
 namespace ApiLinaAgbd.Services.Facturacion
 {
@@ -16,12 +16,13 @@ namespace ApiLinaAgbd.Services.Facturacion
 			_emisor = options.Value.Emisor ?? new EmisorSettings();
 		}
 
-		public UblDebitNoteDocument Build(NotaDebitoRequestDto request)
+		public UblDebitNoteDocument Build(UblAdjustmentPayloadDto request)
 		{
 			var moneda = string.IsNullOrWhiteSpace(request.Moneda) ? "PEN" : request.Moneda;
 			var horaEmision = string.IsNullOrWhiteSpace(request.HoraEmision)
 				? DateTime.Now.ToString("HH:mm:ss")
 				: request.HoraEmision;
+			var montoEnLetras = EnSoles(request.Totales.Total);
 
 			return new UblDebitNoteDocument
 			{
@@ -30,11 +31,13 @@ namespace ApiLinaAgbd.Services.Facturacion
 				Id = UblNode.Value($"{request.Serie}-{request.Correlativo}"),
 				IssueDate = UblNode.Value(request.FechaEmision),
 				IssueTime = UblNode.Value(horaEmision),
-				InvoiceTypeCode = UblNode.Value(TipoDocumentoNotaDebito),
+				Note =
+				[
+					UblNode.Attr(montoEnLetras, "languageLocaleID", "1000")
+				],
 				DocumentCurrencyCode = UblNode.Value(moneda),
 				DiscrepancyResponse = new UblDiscrepancyResponse
 				{
-					ReferenceId = UblNode.Value(request.DocumentoReferencia.Id),
 					ResponseCode = UblNode.Value(request.Motivo.Codigo),
 					Description = UblNode.Value(request.Motivo.Descripcion)
 				},
@@ -73,13 +76,25 @@ namespace ApiLinaAgbd.Services.Facturacion
 					},
 					PartyLegalEntity = new UblPartyLegalEntity
 					{
-						RegistrationName = UblNode.Value(_emisor.RazonSocial)
+						RegistrationName = UblNode.Value(_emisor.RazonSocial),
+						RegistrationAddress = new UblRegistrationAddress
+						{
+							AddressTypeCode = string.IsNullOrWhiteSpace(_emisor.CodigoEstablecimiento)
+								? null
+								: UblNode.Value(_emisor.CodigoEstablecimiento),
+							AddressLine = string.IsNullOrWhiteSpace(_emisor.Direccion)
+								? null
+								: new UblAddressLine
+								{
+									Line = UblNode.Value(_emisor.Direccion)
+								}
+						}
 					}
 				}
 			};
 		}
 
-		private static UblAccountingParty BuildCliente(NotaDebitoClienteDto cliente)
+		private static UblAccountingParty BuildCliente(UblPartyPayloadDto cliente)
 		{
 			return new UblAccountingParty
 			{
@@ -126,7 +141,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			};
 		}
 
-		private static List<UblDebitNoteLine> BuildLineas(List<NotaDebitoItemDto> items, string moneda)
+		private static List<UblDebitNoteLine> BuildLineas(List<UblItemPayloadDto> items, string moneda)
 		{
 			var lineas = new List<UblDebitNoteLine>();
 

@@ -22,8 +22,9 @@ namespace ApiLinaAgbd.Models.Facturacion.Ubl
 		[JsonPropertyName("cbc:IssueTime")]
 		public UblNode IssueTime { get; set; } = UblNode.Value(string.Empty);
 
-		[JsonPropertyName("cbc:InvoiceTypeCode")]
-		public UblNode InvoiceTypeCode { get; set; } = UblNode.Value("08");
+		[JsonPropertyName("cbc:Note")]
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public List<UblNode>? Note { get; set; }
 
 		[JsonPropertyName("cbc:DocumentCurrencyCode")]
 		public UblNode DocumentCurrencyCode { get; set; } = UblNode.Value("PEN");
@@ -53,7 +54,8 @@ namespace ApiLinaAgbd.Models.Facturacion.Ubl
 	public class UblDiscrepancyResponse
 	{
 		[JsonPropertyName("cbc:ReferenceID")]
-		public UblNode ReferenceId { get; set; } = new();
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public UblNode? ReferenceId { get; set; }
 
 		[JsonPropertyName("cbc:ResponseCode")]
 		public UblNode ResponseCode { get; set; } = new();

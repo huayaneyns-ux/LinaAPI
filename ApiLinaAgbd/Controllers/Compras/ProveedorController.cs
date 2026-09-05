@@ -3,6 +3,7 @@ using System.Data;
 using System.Data.SqlClient;
 using ApiLinaAgbd.Data;
 using ApiLinaAgbd.Models.Compras.Proveedor;
+using System.Text.Json;
 
 namespace ApiLinaAgbd.Controllers.Inventario
 {
@@ -112,14 +113,22 @@ namespace ApiLinaAgbd.Controllers.Inventario
 			{
 				con.Open();
 
+				JsonElement json = (JsonElement)data;
+
+				string ruc = json.GetProperty("ruc").GetString();
+				string razonSocial = json.GetProperty("razonSocial").GetString();
+				string nombreContacto = json.GetProperty("nombreContacto").GetString();
+				string telefono = json.GetProperty("telefono").GetString();
+				int idDireccion = json.GetProperty("idDireccion").GetInt32();
+
 				SqlCommand cmd = new SqlCommand("USP_PRO_INS_PROVEEDOR", con);
 				cmd.CommandType = CommandType.StoredProcedure;
 
-				cmd.Parameters.AddWithValue("@Ruc", (string)data.ruc);
-				cmd.Parameters.AddWithValue("@RazonSocial", (string)data.razonSocial);
-				cmd.Parameters.AddWithValue("@NombreContacto", (string)data.nombreContacto);
-				cmd.Parameters.AddWithValue("@Telefono", (string)data.telefono);
-				cmd.Parameters.AddWithValue("@IdDireccion", (int)data.idDireccion);
+				cmd.Parameters.AddWithValue("@Ruc", ruc);
+				cmd.Parameters.AddWithValue("@RazonSocial", razonSocial);
+				cmd.Parameters.AddWithValue("@NombreContacto", nombreContacto);
+				cmd.Parameters.AddWithValue("@Telefono", telefono);
+				cmd.Parameters.AddWithValue("@IdDireccion", idDireccion);
 
 				cmd.ExecuteNonQuery();
 			}

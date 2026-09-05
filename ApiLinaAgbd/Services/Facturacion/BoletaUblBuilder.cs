@@ -1,5 +1,4 @@
 using ApiLinaAgbd.Models.Facturacion;
-using ApiLinaAgbd.Models.Facturacion.Boleta;
 using ApiLinaAgbd.Models.Facturacion.Ubl;
 using Microsoft.Extensions.Options;
 
@@ -17,7 +16,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			_emisor = options.Value.Emisor ?? new EmisorSettings();
 		}
 
-		public UblInvoiceDocument Build(BoletaRequestDto request)
+		public UblInvoiceDocument Build(UblInvoicePayloadDto request)
 		{
 			var moneda = string.IsNullOrWhiteSpace(request.Moneda) ? "PEN" : request.Moneda;
 			var horaEmision = string.IsNullOrWhiteSpace(request.HoraEmision)
@@ -83,7 +82,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			};
 		}
 
-		private static UblAccountingParty BuildCliente(BoletaClienteDto cliente)
+		private static UblAccountingParty BuildCliente(UblPartyPayloadDto cliente)
 		{
 			var direccion = string.IsNullOrWhiteSpace(cliente.Direccion)
 				? null
@@ -136,7 +135,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			};
 		}
 
-		private static List<UblInvoiceLine> BuildLineas(List<BoletaItemDto> items, string moneda)
+		private static List<UblInvoiceLine> BuildLineas(List<UblItemPayloadDto> items, string moneda)
 		{
 			var lineas = new List<UblInvoiceLine>();
 

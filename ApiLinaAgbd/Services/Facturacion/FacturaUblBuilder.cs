@@ -1,5 +1,4 @@
 using ApiLinaAgbd.Models.Facturacion;
-using ApiLinaAgbd.Models.Facturacion.Factura;
 using ApiLinaAgbd.Models.Facturacion.Ubl;
 using Microsoft.Extensions.Options;
 
@@ -17,7 +16,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			_emisor = options.Value.Emisor ?? new EmisorSettings();
 		}
 
-		public UblInvoiceDocument Build(FacturaRequestDto request)
+		public UblInvoiceDocument Build(UblInvoicePayloadDto request)
 		{
 			var moneda = string.IsNullOrWhiteSpace(request.Moneda) ? "PEN" : request.Moneda;
 			var horaEmision = string.IsNullOrWhiteSpace(request.HoraEmision)
@@ -33,6 +32,9 @@ namespace ApiLinaAgbd.Services.Facturacion
 				CustomizationId = UblNode.Value("2.0"),
 				Id = UblNode.Value($"{request.Serie}-{request.Correlativo}"),
 				IssueDate = UblNode.Value(request.FechaEmision),
+				DueDate = string.IsNullOrWhiteSpace(request.FechaVencimiento)
+					? null
+					: UblNode.Value(request.FechaVencimiento),
 				IssueTime = UblNode.Value(horaEmision),
 				InvoiceTypeCode = UblNode.Attr(TipoDocumentoFactura, "listID", CodigoOperacionVentaInterna),
 				Note =
@@ -49,6 +51,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 					TaxInclusiveAmount = UblNode.Amount(request.Totales.Total, moneda),
 					PayableAmount = UblNode.Amount(request.Totales.Total, moneda)
 				},
+				PaymentTerms = BuildPaymentTerms(request.Pago, moneda),
 				InvoiceLine = BuildLineas(request.Items, moneda)
 			};
 		}
@@ -66,15 +69,33 @@ namespace ApiLinaAgbd.Services.Facturacion
 					{
 						Id = UblNode.Attr(_emisor.Ruc, "schemeID", _emisor.TipoDocumento)
 					},
+					PartyName = string.IsNullOrWhiteSpace(_emisor.NombreComercial)
+						? null
+						: new UblPartyName
+						{
+							Name = UblNode.Value(_emisor.NombreComercial)
+						},
 					PartyLegalEntity = new UblPartyLegalEntity
 					{
-						RegistrationName = UblNode.Value(_emisor.RazonSocial)
+						RegistrationName = UblNode.Value(_emisor.RazonSocial),
+						RegistrationAddress = new UblRegistrationAddress
+						{
+							AddressTypeCode = string.IsNullOrWhiteSpace(_emisor.CodigoEstablecimiento)
+								? null
+								: UblNode.Value(_emisor.CodigoEstablecimiento),
+							AddressLine = string.IsNullOrWhiteSpace(_emisor.Direccion)
+								? null
+								: new UblAddressLine
+								{
+									Line = UblNode.Value(_emisor.Direccion)
+								}
+						}
 					}
 				}
 			};
 		}
 
-		private static UblAccountingParty BuildCliente(FacturaClienteDto cliente)
+		private static UblAccountingParty BuildCliente(UblPartyPayloadDto cliente)
 		{
 			var direccion = string.IsNullOrWhiteSpace(cliente.Direccion)
 				? null
@@ -132,7 +153,7 @@ namespace ApiLinaAgbd.Services.Facturacion
 			};
 		}
 
-		private static List<UblInvoiceLine> BuildLineas(List<FacturaItemDto> items, string moneda)
+		private static List<UblInvoiceLine> BuildLineas(List<UblItemPayloadDto> items, string moneda)
 		{
 			var lineas = new List<UblInvoiceLine>();
 
@@ -172,6 +193,45 @@ namespace ApiLinaAgbd.Services.Facturacion
 			}
 
 			return lineas;
+		}
+
+		private static List<UblPaymentTerms>? BuildPaymentTerms(UblPaymentPayloadDto? pago, string moneda)
+		{
+			if (pago is null)
+			{
+				return null;
+			}
+
+			var formaPago = string.Equals(pago.FormaPago, "CREDITO", StringComparison.OrdinalIgnoreCase)
+				? "Credito"
+				: "Contado";
+
+			var paymentTerms = new List<UblPaymentTerms>
+			{
+				new()
+				{
+					Id = UblNode.Value("FormaPago"),
+					PaymentMeansId = UblNode.Value(formaPago)
+				}
+			};
+
+			if (!string.Equals(formaPago, "Credito", StringComparison.OrdinalIgnoreCase))
+			{
+				return paymentTerms;
+			}
+
+			for (var i = 0; i < pago.Cuotas.Count; i++)
+			{
+				var cuota = pago.Cuotas[i];
+				paymentTerms.Add(new UblPaymentTerms
+				{
+					Id = UblNode.Value($"Cuota{(i + 1):000}"),
+					Amount = UblNode.Amount(cuota.Monto, moneda),
+					PaymentDueDate = UblNode.Value(cuota.FechaVencimiento)
+				});
+			}
+
+			return paymentTerms;
 		}
 	}
 }
