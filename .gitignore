@@ -10,3 +10,8 @@ obj/
 *.suo
 *.tmp
 *.log
+
+# Secrets locales
+.env
+*.env
+!.env.example

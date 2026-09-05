@@ -1,7 +1,5 @@
-﻿using System.Data;
-using System.Data.SqlClient;
-using ApiLinaAgbd.Data;
-using ApiLinaAgbd.Models.Inventario.UnidadMedida;
+﻿using ApiLinaAgbd.Models.Inventario.UnidadMedida;
+using ApiLinaAgbd.Services.Inventario.UnidadMedida;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ApiLinaAgbd.Controllers.Inventario
@@ -10,11 +8,11 @@ namespace ApiLinaAgbd.Controllers.Inventario
 	[Route("api/[controller]")]
 	public class UnidadMedidaController : ControllerBase
 	{
-		private readonly Conexion _conexion;
+		private readonly IUnidadMedidaService _unidadMedidaService;
 
-		public UnidadMedidaController(Conexion conexion)
+		public UnidadMedidaController(IUnidadMedidaService unidadMedidaService)
 		{
-			_conexion = conexion;
+			_unidadMedidaService = unidadMedidaService;
 		}
 
 
@@ -24,29 +22,7 @@ namespace ApiLinaAgbd.Controllers.Inventario
 		[HttpGet("Lista")]
 		public IActionResult ListarUnidadMedidas()
 		{
-			List<UnidadMedidaSelectDto> lista = new();
-
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-				SqlCommand cmd = new SqlCommand("USP_SEL_UNIDAD_MEDIDA", con);
-				cmd.CommandType = CommandType.StoredProcedure;
-
-				SqlDataReader dr = cmd.ExecuteReader();
-
-				while (dr.Read())
-				{
-					lista.Add(new UnidadMedidaSelectDto
-					{
-						Id = Convert.ToInt32(dr["id"]),
-						Nombre = dr["nombre"].ToString(),
-						Abreviatura = dr["abreviatura"].ToString(),
-						Estado = Convert.ToBoolean(dr["estado"])
-					});
-				}
-			}
-
+			var lista = _unidadMedidaService.Listar();
 			return Ok(lista);
 		}
 
@@ -59,31 +35,7 @@ namespace ApiLinaAgbd.Controllers.Inventario
 		public IActionResult InsertarUnidadMedida(
 			[FromBody] UnidadMedidaInsertDto unidad)
 		{
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-				SqlCommand cmd = new SqlCommand(
-					"USP_INS_UNIDAD_MEDIDA",
-					con);
-
-				cmd.CommandType = CommandType.StoredProcedure;
-
-
-				cmd.Parameters.AddWithValue(
-					"@nombre",
-					unidad.Nombre);
-
-
-				cmd.Parameters.AddWithValue(
-					"@abreviatura",
-					unidad.Abreviatura);
-
-
-				cmd.ExecuteNonQuery();
-			}
-
-
+			_unidadMedidaService.Insertar(unidad);
 			return Ok("Unidad de medida registrada correctamente.");
 		}
 
@@ -98,39 +50,7 @@ namespace ApiLinaAgbd.Controllers.Inventario
 		public IActionResult ActualizarUnidadMedida(
 			[FromBody] UnidadMedidaUpdateDto unidad)
 		{
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-
-				SqlCommand cmd = new SqlCommand(
-					"USP_UPD_UNIDAD_MEDIDA",
-					con);
-
-
-				cmd.CommandType = CommandType.StoredProcedure;
-
-
-				cmd.Parameters.AddWithValue(
-					"@id",
-					unidad.Id);
-
-
-				cmd.Parameters.AddWithValue(
-					"@nombre",
-					unidad.Nombre);
-
-
-				cmd.Parameters.AddWithValue(
-					"@abreviatura",
-					unidad.Abreviatura);
-
-
-
-				cmd.ExecuteNonQuery();
-			}
-
-
+			_unidadMedidaService.Actualizar(unidad);
 			return Ok("Unidad de medida actualizada correctamente.");
 		}
 
@@ -144,28 +64,7 @@ namespace ApiLinaAgbd.Controllers.Inventario
 		[HttpDelete("{id}")]
 		public IActionResult EliminarUnidadMedida(int id)
 		{
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-
-				SqlCommand cmd = new SqlCommand(
-					"USP_DEL_UNIDAD_MEDIDA",
-					con);
-
-
-				cmd.CommandType = CommandType.StoredProcedure;
-
-
-				cmd.Parameters.AddWithValue(
-					"@id",
-					id);
-
-
-				cmd.ExecuteNonQuery();
-			}
-
-
+			_unidadMedidaService.Eliminar(id);
 			return Ok("Unidad de medida eliminada correctamente.");
 		}
 
@@ -179,48 +78,10 @@ namespace ApiLinaAgbd.Controllers.Inventario
 		[HttpGet("{id}")]
 		public IActionResult ObtenerUnidadMedidaPorId(int id)
 		{
-
-			UnidadMedidaObtenerIdDto unidad = null;
-
-
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-
-				SqlCommand cmd = new SqlCommand(
-					"USP_SEL_UNIDAD_MEDIDA_ID",
-					con);
-
-
-				cmd.CommandType = CommandType.StoredProcedure;
-
-
-				cmd.Parameters.AddWithValue(
-					"@id",
-					id);
-
-
-
-				SqlDataReader dr = cmd.ExecuteReader();
-
-
-				if (dr.Read())
-				{
-					unidad = new UnidadMedidaObtenerIdDto
-					{
-						Id = Convert.ToInt32(dr["id"]),
-						Nombre = dr["nombre"].ToString(),
-						Abreviatura = dr["abreviatura"].ToString(),
-						Estado = Convert.ToBoolean(dr["estado"])
-					};
-				}
-			}
-
+			var unidad = _unidadMedidaService.ObtenerPorId(id);
 
 			if (unidad == null)
 				return NotFound("Unidad de medida no encontrada.");
-
 
 			return Ok(unidad);
 		}
