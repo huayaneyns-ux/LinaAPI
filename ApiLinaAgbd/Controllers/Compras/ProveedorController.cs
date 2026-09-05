@@ -1,101 +1,32 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using System.Data;
-using System.Data.SqlClient;
-using ApiLinaAgbd.Data;
+﻿using System.Text.Json;
 using ApiLinaAgbd.Models.Compras.Proveedor;
-using System.Text.Json;
+using ApiLinaAgbd.Services.Compras.Proveedor;
+using Microsoft.AspNetCore.Mvc;
 
-namespace ApiLinaAgbd.Controllers.Inventario
+namespace ApiLinaAgbd.Controllers.Compras
 {
 	[ApiController]
 	[Route("api/[controller]")]
 	public class ProveedorController : ControllerBase
 	{
-		private readonly Conexion _conexion;
+		private readonly IProveedorService _proveedorService;
 
-		public ProveedorController(Conexion conexion)
+		public ProveedorController(IProveedorService proveedorService)
 		{
-			_conexion = conexion;
+			_proveedorService = proveedorService;
 		}
 
-		// =====================================
-		// LISTAR
-		// =====================================
 		[HttpGet]
 		public IActionResult Listar()
 		{
-			var lista = new List<object>();
-
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-				SqlCommand cmd = new SqlCommand("USP_PRO_SEL_PROVEEDOR_LISTAR", con);
-				cmd.CommandType = CommandType.StoredProcedure;
-
-				SqlDataReader dr = cmd.ExecuteReader();
-
-				while (dr.Read())
-				{
-					lista.Add(new
-					{
-						Id = Convert.ToInt32(dr["id"]),
-						Ruc = dr["ruc"].ToString(),
-						RazonSocial = dr["razon_social"].ToString(),
-						NombreContacto = dr["nombre_contacto"].ToString(),
-						Telefono = dr["telefono"].ToString(),
-						Estado = Convert.ToBoolean(dr["estado"]),
-
-						IdDireccion = Convert.ToInt32(dr["id_direccion"]),
-						Direccion = dr["direccion"].ToString(),
-						Distrito = dr["distrito"].ToString(),
-						Provincia = dr["provincia"].ToString(),
-						Departamento = dr["departamento"].ToString()
-					});
-				}
-			}
-
+			var lista = _proveedorService.Listar();
 			return Ok(lista);
 		}
 
-		// =====================================
-		// OBTENER POR ID
-		// =====================================
 		[HttpGet("{id}")]
 		public IActionResult Obtener(int id)
 		{
-			object proveedor = null;
-
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-				SqlCommand cmd = new SqlCommand("USP_PRO_SEL_PROVEEDOR_OBTENER", con);
-				cmd.CommandType = CommandType.StoredProcedure;
-
-				cmd.Parameters.AddWithValue("@Id", id);
-
-				SqlDataReader dr = cmd.ExecuteReader();
-
-				if (dr.Read())
-				{
-					proveedor = new
-					{
-						Id = Convert.ToInt32(dr["id"]),
-						Ruc = dr["ruc"].ToString(),
-						RazonSocial = dr["razon_social"].ToString(),
-						NombreContacto = dr["nombre_contacto"].ToString(),
-						Telefono = dr["telefono"].ToString(),
-						Estado = Convert.ToBoolean(dr["estado"]),
-
-						IdDireccion = Convert.ToInt32(dr["id_direccion"]),
-						Direccion = dr["direccion"].ToString(),
-						Distrito = dr["distrito"].ToString(),
-						Provincia = dr["provincia"].ToString(),
-						Departamento = dr["departamento"].ToString()
-					};
-				}
-			}
+			var proveedor = _proveedorService.Obtener(id);
 
 			if (proveedor == null)
 				return NotFound("Proveedor no encontrado");
@@ -103,84 +34,25 @@ namespace ApiLinaAgbd.Controllers.Inventario
 			return Ok(proveedor);
 		}
 
-		// =====================================
-		// INSERTAR
-		// =====================================
 		[HttpPost]
 		public IActionResult Insertar([FromBody] dynamic data)
 		{
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-				JsonElement json = (JsonElement)data;
-
-				string ruc = json.GetProperty("ruc").GetString();
-				string razonSocial = json.GetProperty("razonSocial").GetString();
-				string nombreContacto = json.GetProperty("nombreContacto").GetString();
-				string telefono = json.GetProperty("telefono").GetString();
-				int idDireccion = json.GetProperty("idDireccion").GetInt32();
-
-				SqlCommand cmd = new SqlCommand("USP_PRO_INS_PROVEEDOR", con);
-				cmd.CommandType = CommandType.StoredProcedure;
-
-				cmd.Parameters.AddWithValue("@Ruc", ruc);
-				cmd.Parameters.AddWithValue("@RazonSocial", razonSocial);
-				cmd.Parameters.AddWithValue("@NombreContacto", nombreContacto);
-				cmd.Parameters.AddWithValue("@Telefono", telefono);
-				cmd.Parameters.AddWithValue("@IdDireccion", idDireccion);
-
-				cmd.ExecuteNonQuery();
-			}
-
+			JsonElement json = (JsonElement)data;
+			_proveedorService.Insertar(json);
 			return Ok("Proveedor registrado correctamente");
 		}
 
-		// =====================================
-		// ACTUALIZAR
-		// =====================================
 		[HttpPut]
 		public IActionResult Actualizar([FromBody] ProveedorUpdate proveedor)
 		{
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-				SqlCommand cmd = new SqlCommand("USP_PRO_UPD_PROVEEDOR", con);
-				cmd.CommandType = CommandType.StoredProcedure;
-
-				cmd.Parameters.AddWithValue("@Id", proveedor.Id);
-				cmd.Parameters.AddWithValue("@Ruc", proveedor.Ruc);
-				cmd.Parameters.AddWithValue("@RazonSocial", proveedor.RazonSocial);
-				cmd.Parameters.AddWithValue("@NombreContacto", proveedor.NombreContacto);
-				cmd.Parameters.AddWithValue("@Telefono", proveedor.Telefono);
-				cmd.Parameters.AddWithValue("@IdDireccion", proveedor.IdDireccion);
-				cmd.Parameters.AddWithValue("@Estado", proveedor.Estado);
-
-				cmd.ExecuteNonQuery();
-			}
-
+			_proveedorService.Actualizar(proveedor);
 			return Ok("Proveedor actualizado correctamente");
 		}
 
-		// =====================================
-		// ELIMINAR (SOFT DELETE)
-		// =====================================
 		[HttpDelete("{id}")]
 		public IActionResult Eliminar(int id)
 		{
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-				SqlCommand cmd = new SqlCommand("USP_PRO_DEL_PROVEEDOR", con);
-				cmd.CommandType = CommandType.StoredProcedure;
-
-				cmd.Parameters.AddWithValue("@Id", id);
-
-				cmd.ExecuteNonQuery();
-			}
-
+			_proveedorService.Eliminar(id);
 			return Ok("Proveedor desactivado correctamente");
 		}
 	}

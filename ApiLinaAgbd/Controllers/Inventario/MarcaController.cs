@@ -1,7 +1,5 @@
-﻿using System.Data;
-using System.Data.SqlClient;
-using ApiLinaAgbd.Data;
-using ApiLinaAgbd.Models.Inventario.Marca;
+﻿using ApiLinaAgbd.Models.Inventario.Marca;
+using ApiLinaAgbd.Services.Inventario.Marca;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ApiLinaAgbd.Controllers.Inventario
@@ -10,11 +8,11 @@ namespace ApiLinaAgbd.Controllers.Inventario
 	[Route("api/[controller]")]
 	public class MarcaController : ControllerBase
 	{
-		private readonly Conexion _conexion;
+		private readonly IMarcaService _marcaService;
 
-		public MarcaController(Conexion conexion)
+		public MarcaController(IMarcaService marcaService)
 		{
-			_conexion = conexion;
+			_marcaService = marcaService;
 		}
 
 		//=========================================
@@ -23,29 +21,7 @@ namespace ApiLinaAgbd.Controllers.Inventario
 		[HttpGet("Lista")]
 		public IActionResult ListarMarcas()
 		{
-			List<MarcaSelectDto> lista = new();
-
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-				SqlCommand cmd = new SqlCommand("USP_PRO_SEL_MARCA_LISTAR", con);
-				cmd.CommandType = CommandType.StoredProcedure;
-
-				SqlDataReader dr = cmd.ExecuteReader();
-
-				while (dr.Read())
-				{
-					lista.Add(new MarcaSelectDto
-					{
-						Id = Convert.ToInt32(dr["id"]),
-						Nombre = dr["nombre"].ToString(),
-						Estado = Convert.ToBoolean(dr["estado"]),
-						UrlImagen = dr["url_imagen"] == DBNull.Value ? null : dr["url_imagen"].ToString()
-					});
-				}
-			}
-
+			var lista = _marcaService.Listar();
 			return Ok(lista);
 		}
 
@@ -55,19 +31,7 @@ namespace ApiLinaAgbd.Controllers.Inventario
 		[HttpPost]
 		public IActionResult InsertarMarca([FromBody] MarcaInsertDto marca)
 		{
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-				SqlCommand cmd = new SqlCommand("USP_PRO_INS_MARCA", con);
-				cmd.CommandType = CommandType.StoredProcedure;
-
-				cmd.Parameters.AddWithValue("@Nombre", marca.Nombre);
-				cmd.Parameters.AddWithValue("@UrlImagen", (object?)marca.UrlImagen ?? DBNull.Value);
-
-				cmd.ExecuteNonQuery();
-			}
-
+			_marcaService.Insertar(marca);
 			return Ok("Marca registrada correctamente.");
 		}
 
@@ -77,21 +41,7 @@ namespace ApiLinaAgbd.Controllers.Inventario
 		[HttpPut]
 		public IActionResult ActualizarMarca([FromBody] MarcaUpdateDto marca)
 		{
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-				SqlCommand cmd = new SqlCommand("USP_PRO_UPD_MARCA", con);
-				cmd.CommandType = CommandType.StoredProcedure;
-
-				cmd.Parameters.AddWithValue("@Id", marca.Id);
-				cmd.Parameters.AddWithValue("@Nombre", marca.Nombre);
-				cmd.Parameters.AddWithValue("@Estado", marca.Estado);
-				cmd.Parameters.AddWithValue("@UrlImagen", (object?)marca.UrlImagen ?? DBNull.Value);
-
-				cmd.ExecuteNonQuery();
-			}
-
+			_marcaService.Actualizar(marca);
 			return Ok("Marca actualizada correctamente.");
 		}
 
@@ -101,18 +51,7 @@ namespace ApiLinaAgbd.Controllers.Inventario
 		[HttpDelete("{id}")]
 		public IActionResult EliminarMarca(int id)
 		{
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-				SqlCommand cmd = new SqlCommand("USP_PRO_DEL_MARCA", con);
-				cmd.CommandType = CommandType.StoredProcedure;
-
-				cmd.Parameters.AddWithValue("@Id", id);
-
-				cmd.ExecuteNonQuery();
-			}
-
+			_marcaService.Eliminar(id);
 			return Ok("Marca eliminada correctamente.");
 		}
 
@@ -122,30 +61,7 @@ namespace ApiLinaAgbd.Controllers.Inventario
 		[HttpGet("{id}")]
 		public IActionResult ObtenerMarcaPorId(int id)
 		{
-			MarcaObtenerIDDto marca = null;
-
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-				SqlCommand cmd = new SqlCommand("USP_PRO_SEL_MARCA_OBTENER", con);
-				cmd.CommandType = CommandType.StoredProcedure;
-
-				cmd.Parameters.AddWithValue("@Id", id);
-
-				SqlDataReader dr = cmd.ExecuteReader();
-
-				if (dr.Read())
-				{
-					marca = new MarcaObtenerIDDto
-					{
-						Id = Convert.ToInt32(dr["id"]),
-						Nombre = dr["nombre"].ToString(),
-						Estado = Convert.ToBoolean(dr["estado"]),
-						UrlImagen = dr["url_imagen"] == DBNull.Value ? null : dr["url_imagen"].ToString()
-					};
-				}
-			}
+			var marca = _marcaService.ObtenerPorId(id);
 
 			if (marca == null)
 				return NotFound("Marca no encontrada.");
