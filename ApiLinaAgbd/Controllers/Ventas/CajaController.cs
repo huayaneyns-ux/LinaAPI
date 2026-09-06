@@ -53,7 +53,9 @@ namespace ApiLinaAgbd.Controllers.Ventas
 						VentaOrigenId = idVenta,
 						ReceptorSource = tipoComprobante == "FACTURA" && venta.ClienteFiscal is not null
 							? "CUSTOMER"
-							: "SALE_CUSTOMER",
+							: !venta.IdCliente.HasValue && tipoComprobante == "BOLETA"
+								? "UNIDENTIFIED"
+								: "SALE_CUSTOMER",
 						Cliente = venta.ClienteFiscal is null ? null : new ComprobanteVentaClienteDto
 						{
 							TipoDocumento = venta.ClienteFiscal.TipoDocumento,

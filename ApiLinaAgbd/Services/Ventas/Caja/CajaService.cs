@@ -20,9 +20,13 @@ namespace ApiLinaAgbd.Services.Ventas.Caja
 			var tipoComprobante = (venta.TipoComprobante ?? "BOLETA").Trim().ToUpperInvariant();
 			var subtotal = venta.Detalle?.Sum(item => item.Cantidad * item.PrecioUnitario) ?? 0m;
 			var total = subtotal * 1.18m;
-			if (!venta.IdCliente.HasValue &&
-				(tipoComprobante != "SIN_COMPROBANTE" || total > 5m))
-				throw new ArgumentException("Una venta sin comprobante solo se permite hasta S/ 5.");
+			if (!venta.IdCliente.HasValue)
+			{
+				var boletaSinDocumentoValida = tipoComprobante == "BOLETA" && total <= 700m;
+				var sinComprobanteValido = tipoComprobante == "SIN_COMPROBANTE" && total <= 5m;
+				if (!boletaSinDocumentoValida && !sinComprobanteValido)
+					throw new ArgumentException("Sin documento solo se permite Boleta hasta S/ 700 o Sin comprobante hasta S/ 5.");
+			}
 
 			return _cajaRepository.RegistrarVenta(venta);
 		}

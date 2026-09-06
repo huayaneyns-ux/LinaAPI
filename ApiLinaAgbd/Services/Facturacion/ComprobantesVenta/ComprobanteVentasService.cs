@@ -70,7 +70,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 					CAST(dv.preciounitario AS decimal(18, 2)) AS PrecioUnitario,
 					COALESCE(NULLIF(um.abreviatura, ''), 'NIU') AS UnidadMedida
 				FROM dbo.venta v
-				INNER JOIN dbo.usuario u ON u.id = v.id_cliente
+				LEFT JOIN dbo.usuario u ON u.id = v.id_cliente
 				LEFT JOIN dbo.documento d ON d.id = u.id_documento
 				OUTER APPLY (
 					SELECT TOP 1 dir.nombre_direccion
@@ -990,6 +990,19 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 
 			if (string.IsNullOrWhiteSpace(documento))
 			{
+				if (tipo == "BOLETA" && venta.Total <= 700m)
+				{
+					return new ComprobanteVentaClienteDto
+					{
+						// APISUNAT representa una boleta sin documento con DNI genérico.
+						TipoDocumento = "DNI",
+						Documento = "00000000",
+						Nombre = "---",
+						Direccion = string.Empty,
+						Correo = string.Empty
+					};
+				}
+
 				throw new InvalidOperationException("Debe ingresar DNI o RUC para consultar al cliente.");
 			}
 
@@ -1097,6 +1110,13 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 		{
 			var documento = (cliente.Documento ?? string.Empty).Trim();
 			var tipoDocumento = (cliente.TipoDocumento ?? string.Empty).Trim().ToUpperInvariant();
+
+			if (tipoDocumento == "DNI" && documento == "00000000")
+			{
+				if (cliente.Nombre != "---")
+					throw new InvalidOperationException("El receptor genérico de la boleta no es válido.");
+				return;
+			}
 
 			if (string.IsNullOrWhiteSpace(documento))
 			{
