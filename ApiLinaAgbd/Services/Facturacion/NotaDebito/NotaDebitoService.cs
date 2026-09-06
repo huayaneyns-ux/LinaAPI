@@ -44,7 +44,8 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 				throw new InvalidOperationException("Falta FacturacionSettings:Emisor:Ruc o RazonSocial.");
 			}
 
-			var referencia = (await _repository.ListarComprobantesBaseAsync()).FirstOrDefault(x => x.Id == request.VoucherReferenciaId)
+			var referencia = (await _repository.ListarComprobantesBaseAsync()).FirstOrDefault(x =>
+				string.Equals(x.Id?.Trim(), request.VoucherReferenciaId?.Trim(), StringComparison.OrdinalIgnoreCase))
 				?? throw new InvalidOperationException("El comprobante base no existe.");
 			if (referencia.SunatTypeCode is not ("01" or "03"))
 				throw new InvalidOperationException("Una nota de débito solo puede referenciar una factura o boleta.");
@@ -63,6 +64,16 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 			var serie = referencia.SunatTypeCode == "01" ? SerieFactura : SerieBoleta;
 			var voucherId = Guid.NewGuid();
 			string numero;
+
+			if (request.Motivo.Codigo == "02")
+			{
+				using var validacionCon = _repository.CreateConnection();
+				await validacionCon.OpenAsync();
+				await FacturacionVoucherHelper.ValidarAumentoValorAsync(
+					validacionCon,
+					Guid.Parse(referencia.Id),
+					items.Select(x => (x.VoucherItemReferenciaId, x.Cantidad, x.Ambito)).ToList());
+			}
 
 			using (var con = _repository.CreateConnection())
 			{

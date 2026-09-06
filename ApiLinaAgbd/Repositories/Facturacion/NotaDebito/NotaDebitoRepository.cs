@@ -17,17 +17,39 @@ namespace ApiLinaAgbd.Repositories.Facturacion.NotaDebito
 			using var con = CreateConnection();
 			await con.OpenAsync();
 			const string sql = """
+			WITH ItemsConDevoluciones AS
+			(
+				SELECT i.Id, i.VoucherId, i.ProductId, i.ProductCode, i.Description,
+				       i.LineNumber, i.Quantity, i.UnitCode, i.UnitPrice, i.SaleValue, i.Igv,
+				       i.Total,
+				       COALESCE((
+				           SELECT SUM(dev.Quantity)
+				           FROM dbo.VoucherItem dev
+				           INNER JOIN dbo.Voucher devVoucher ON devVoucher.Id = dev.VoucherId
+				           INNER JOIN dbo.VoucherAdjustment devAdjustment ON devAdjustment.VoucherId = dev.VoucherId
+				           WHERE devAdjustment.ReferencedVoucherId = i.VoucherId
+				             AND devAdjustment.ReasonCode IN ('05', '07')
+				             AND devVoucher.SunatTypeCode = '07'
+				             AND devVoucher.SunatStatus = 'ACEPTADO'
+				             AND dev.ReferencedVoucherItemId = i.Id
+				       ), 0) AS ReturnedQuantity
+				FROM dbo.VoucherItem i
+			)
 			SELECT v.Id, v.SunatTypeCode, v.Series, v.Number, v.IssueDate, v.Currency,
 			       v.Subtotal, v.Igv, v.Total,
 			       COALESCE(p.Name, '') ClienteNombre, COALESCE(p.DocumentType, '') ClienteTipoDocumento,
 			       COALESCE(p.DocumentNumber, '') ClienteDocumento, COALESCE(p.Address, '') ClienteDireccion,
 			       i.Id ItemId, i.ProductId, COALESCE(i.ProductCode, '') ProductCode,
-			       i.Description, i.Quantity, COALESCE(i.UnitPrice, 0) UnitPrice,
-			       COALESCE(i.SaleValue, 0) SaleValue, COALESCE(i.Igv, 0) ItemIgv,
-			       COALESCE(i.Total, 0) ItemTotal, i.UnitCode
+			       i.Description,
+			       i.Quantity - i.ReturnedQuantity AS Quantity,
+			       COALESCE(i.UnitPrice, 0) UnitPrice,
+			       CASE WHEN i.Quantity > 0 THEN COALESCE(i.SaleValue, 0) * (i.Quantity - i.ReturnedQuantity) / i.Quantity ELSE 0 END SaleValue,
+			       CASE WHEN i.Quantity > 0 THEN COALESCE(i.Igv, 0) * (i.Quantity - i.ReturnedQuantity) / i.Quantity ELSE 0 END ItemIgv,
+			       CASE WHEN i.Quantity > 0 THEN COALESCE(i.Total, 0) * (i.Quantity - i.ReturnedQuantity) / i.Quantity ELSE 0 END ItemTotal,
+			       i.UnitCode
 			FROM dbo.Voucher v
 			LEFT JOIN dbo.VoucherParty p ON p.VoucherId = v.Id AND p.Role = 'CUSTOMER'
-			LEFT JOIN dbo.VoucherItem i ON i.VoucherId = v.Id
+			LEFT JOIN ItemsConDevoluciones i ON i.VoucherId = v.Id
 			WHERE v.SunatTypeCode IN ('01','03') AND v.SunatStatus = 'ACEPTADO'
 			  AND NOT EXISTS (
 			      SELECT 1 FROM dbo.VoucherAdjustment a
@@ -35,6 +57,13 @@ namespace ApiLinaAgbd.Repositories.Facturacion.NotaDebito
 			      WHERE a.ReferencedVoucherId = v.Id AND n.SunatTypeCode = '07'
 			        AND n.SunatStatus = 'ACEPTADO' AND a.ReasonCode IN ('01','02','06')
 			  )
+			  AND EXISTS (
+			      SELECT 1
+			      FROM ItemsConDevoluciones disponible
+			      WHERE disponible.VoucherId = v.Id
+			        AND disponible.Quantity - disponible.ReturnedQuantity > 0
+			  )
+			  AND (i.Id IS NULL OR i.Quantity - i.ReturnedQuantity > 0)
 			ORDER BY v.CreatedAt DESC, i.LineNumber;
 			""";
 			using var cmd = new SqlCommand(sql, con);

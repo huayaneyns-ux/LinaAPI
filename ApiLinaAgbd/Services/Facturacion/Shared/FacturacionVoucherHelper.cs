@@ -235,6 +235,86 @@ namespace ApiLinaAgbd.Services.Facturacion.Shared
 			throw new InvalidOperationException("No se pudo generar un número aleatorio único para el comprobante.");
 		}
 
+		internal static async Task ValidarAumentoValorAsync(
+			SqlConnection con,
+			Guid voucherReferenciaId,
+			IReadOnlyCollection<(string? ItemId, decimal Cantidad, string Ambito)> items)
+		{
+			const string estadoSql = "SELECT SunatStatus FROM dbo.Voucher WHERE Id = @Id;";
+			using (var estadoCmd = new SqlCommand(estadoSql, con))
+			{
+				estadoCmd.Parameters.AddWithValue("@Id", voucherReferenciaId);
+				var estado = (await estadoCmd.ExecuteScalarAsync())?.ToString()?.Trim().ToUpperInvariant();
+				if (estado == "ANULADO")
+				{
+					throw new InvalidOperationException("No se puede emitir una nota de débito: el comprobante base está anulado en SUNAT.");
+				}
+			}
+
+			const string anulacionSql = """
+				SELECT COUNT(1)
+				FROM dbo.VoucherAdjustment a
+				INNER JOIN dbo.Voucher n ON n.Id = a.VoucherId
+				WHERE a.ReferencedVoucherId = @Id
+				  AND n.SunatTypeCode = '07'
+				  AND n.SunatStatus = 'ACEPTADO'
+				  AND a.ReasonCode IN ('01', '02', '06');
+				""";
+			using (var anulacionCmd = new SqlCommand(anulacionSql, con))
+			{
+				anulacionCmd.Parameters.AddWithValue("@Id", voucherReferenciaId);
+				if (Convert.ToInt32(await anulacionCmd.ExecuteScalarAsync()) > 0)
+				{
+					throw new InvalidOperationException("No se puede emitir una nota de débito: el comprobante fue anulado o devuelto totalmente mediante una nota de crédito aceptada.");
+				}
+			}
+
+			const string itemsSql = """
+				SELECT baseItem.Id, baseItem.Quantity,
+				       COALESCE((SELECT SUM(devItem.Quantity)
+				                 FROM dbo.VoucherItem devItem
+				                 INNER JOIN dbo.Voucher dev ON dev.Id = devItem.VoucherId
+				                 INNER JOIN dbo.VoucherAdjustment devAdj ON devAdj.VoucherId = dev.Id
+				                 WHERE devAdj.ReferencedVoucherId = @Id
+				                   AND dev.SunatTypeCode = '07'
+				                   AND dev.SunatStatus = 'ACEPTADO'
+				                   AND devAdj.ReasonCode IN ('05', '07')
+				                   AND devItem.ReferencedVoucherItemId = baseItem.Id), 0) AS ReturnedQuantity
+				FROM dbo.VoucherItem baseItem
+				WHERE baseItem.VoucherId = @Id;
+				""";
+
+			var cantidades = new Dictionary<Guid, (decimal Original, decimal Devuelta)>();
+			using (var itemsCmd = new SqlCommand(itemsSql, con))
+			{
+				itemsCmd.Parameters.AddWithValue("@Id", voucherReferenciaId);
+				using var reader = await itemsCmd.ExecuteReaderAsync();
+				while (await reader.ReadAsync())
+				{
+					cantidades[reader.GetGuid(0)] = (reader.GetDecimal(1), reader.GetDecimal(2));
+				}
+			}
+
+			if (cantidades.Count > 0 && cantidades.Values.All(x => x.Devuelta >= x.Original))
+			{
+				throw new InvalidOperationException("No se puede emitir una nota de débito: todos los ítems del comprobante ya fueron devueltos mediante notas de crédito aceptadas.");
+			}
+
+			foreach (var item in items.Where(x => string.Equals(x.Ambito, "ITEM", StringComparison.OrdinalIgnoreCase)))
+			{
+				if (!Guid.TryParse(item.ItemId, out var itemId) || !cantidades.TryGetValue(itemId, out var cantidad))
+				{
+					throw new InvalidOperationException("No se pudo identificar el ítem original para validar el aumento de valor.");
+				}
+
+				var disponible = cantidad.Original - cantidad.Devuelta;
+				if (disponible <= 0 || item.Cantidad > disponible)
+				{
+					throw new InvalidOperationException($"No se puede aumentar el valor del ítem: la cantidad disponible después de devoluciones es {Math.Max(0, disponible):0.####}.");
+				}
+			}
+		}
+
 		internal static async Task InsertarObservacionesAsync(SqlConnection con, SqlTransaction tx, Guid voucherId, string? observaciones)
 		{
 			var lineas = SepararObservaciones(observaciones);
