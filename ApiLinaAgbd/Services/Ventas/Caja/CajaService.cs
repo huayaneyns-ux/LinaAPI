@@ -18,8 +18,8 @@ namespace ApiLinaAgbd.Services.Ventas.Caja
 		public int RegistrarVenta(CajaVentaInsertDto venta)
 		{
 			var tipoComprobante = (venta.TipoComprobante ?? "BOLETA").Trim().ToUpperInvariant();
-			var subtotal = venta.Detalle?.Sum(item => item.Cantidad * item.PrecioUnitario) ?? 0m;
-			var total = subtotal * 1.18m;
+			// PrecioUnitario viene de Producto.PrecioVenta y ya incluye IGV.
+			var total = venta.Detalle?.Sum(item => item.Cantidad * item.PrecioUnitario) ?? 0m;
 			if (!venta.IdCliente.HasValue)
 			{
 				var boletaSinDocumentoValida = tipoComprobante == "BOLETA" && total <= 700m;

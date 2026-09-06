@@ -126,10 +126,12 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 				}
 
 				var cantidad = Convert.ToDecimal(dr["Cantidad"]);
-				var precio = Convert.ToDecimal(dr["PrecioUnitario"]);
+				var precioFinal = Convert.ToDecimal(dr["PrecioUnitario"]);
 				var porcentajeIgv = ObtenerIgvVenta(dr);
-				var subtotal = Redondear(cantidad * precio);
-				var igvItem = Redondear(subtotal * porcentajeIgv / 100m);
+				var importe = Redondear(cantidad * precioFinal);
+				var subtotal = FacturacionVoucherHelper.CalcularBaseDesdePrecioFinal(importe, porcentajeIgv);
+				var igvItem = Redondear(importe - subtotal);
+				var precioBase = cantidad <= 0 ? 0m : subtotal / cantidad;
 
 				venta.Detalle.Add(new VentaComprobanteDetalleDto
 				{
@@ -137,16 +139,16 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 					Codigo = dr["CodigoProducto"]?.ToString() ?? string.Empty,
 					ProductoServicio = dr["DescripcionProducto"]?.ToString() ?? string.Empty,
 					Cantidad = cantidad,
-					Precio = precio,
+					Precio = precioBase,
 					Igv = igvItem,
-					Importe = Redondear(subtotal + igvItem),
+					Importe = importe,
 					UnidadMedida = dr["UnidadMedida"]?.ToString() ?? "NIU"
 				});
 			}
 
 			foreach (var venta in ventas.Values)
 			{
-				venta.Subtotal = Redondear(venta.Detalle.Sum(x => x.Precio * x.Cantidad));
+				venta.Subtotal = Redondear(venta.Detalle.Sum(x => x.Importe - x.Igv));
 				venta.Igv = Redondear(venta.Detalle.Sum(x => x.Igv));
 				venta.Total = Redondear(venta.Subtotal + venta.Igv);
 			}
@@ -801,7 +803,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 				cmd.Parameters.AddWithValue("@Quantity", item.Cantidad);
 				cmd.Parameters.AddWithValue("@UnitCode", string.IsNullOrWhiteSpace(item.UnidadMedida) ? "NIU" : item.UnidadMedida);
 				cmd.Parameters.AddWithValue("@UnitPrice", item.Precio);
-				cmd.Parameters.AddWithValue("@SaleValue", Redondear(item.Cantidad * item.Precio));
+				cmd.Parameters.AddWithValue("@SaleValue", Redondear(item.Importe - item.Igv));
 				cmd.Parameters.AddWithValue("@IgvPercentage", ObtenerPorcentajeIgv(item));
 				cmd.Parameters.AddWithValue("@Igv", item.Igv);
 				cmd.Parameters.AddWithValue("@Total", item.Importe);
@@ -1223,7 +1225,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 					Descripcion = x.ProductoServicio,
 					Cantidad = x.Cantidad,
 					PrecioUnitario = x.Precio,
-					ValorVenta = Redondear(x.Precio * x.Cantidad),
+					ValorVenta = Redondear(x.Importe - x.Igv),
 					Igv = x.Igv,
 					PrecioConIgv = Redondear(x.Importe / (x.Cantidad <= 0 ? 1 : x.Cantidad)),
 					UnidadMedida = x.UnidadMedida,
@@ -1271,7 +1273,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 					Descripcion = x.ProductoServicio,
 					Cantidad = x.Cantidad,
 					PrecioUnitario = x.Precio,
-					ValorVenta = Redondear(x.Precio * x.Cantidad),
+					ValorVenta = Redondear(x.Importe - x.Igv),
 					Igv = x.Igv,
 					PrecioConIgv = Redondear(x.Importe / (x.Cantidad <= 0 ? 1 : x.Cantidad)),
 					UnidadMedida = x.UnidadMedida,

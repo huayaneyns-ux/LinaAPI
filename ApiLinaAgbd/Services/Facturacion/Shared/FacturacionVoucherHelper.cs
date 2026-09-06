@@ -64,6 +64,12 @@ namespace ApiLinaAgbd.Services.Facturacion.Shared
 		internal static decimal Redondear(decimal valor) =>
 			Math.Round(valor, 2, MidpointRounding.AwayFromZero);
 
+		internal static decimal CalcularBaseDesdePrecioFinal(decimal precioFinal, decimal porcentajeIgv = 18m) =>
+			Redondear(precioFinal / (1m + porcentajeIgv / 100m));
+
+		internal static decimal CalcularIgvDesdePrecioFinal(decimal precioFinal, decimal porcentajeIgv = 18m) =>
+			Redondear(precioFinal - CalcularBaseDesdePrecioFinal(precioFinal, porcentajeIgv));
+
 		internal static bool DocumentoValido(string tipoDocumento, string? numero)
 		{
 			var documento = (numero ?? string.Empty).Trim();
