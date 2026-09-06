@@ -254,11 +254,7 @@ namespace ApiLinaAgbd.Services.Facturacion.LiquidacionCompra
 				await con.OpenAsync();
 				var estadoPostEnvio = await FacturacionVoucherHelper.ConsultarEstadoLuegoDeEnviarAsync(_facturacionSunatService, envio);
 				await FacturacionVoucherHelper.ActualizarVoucherPostEnvioAsync(con, voucherId, estadoPostEnvio.ResultadoFinal, _pdfLocalService);
-				await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", envio, solicitudUtc);
-				if (estadoPostEnvio.Consulta is not null)
-				{
-					await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "STATUS_QUERY", estadoPostEnvio.Consulta, DateTime.UtcNow);
-				}
+				await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", estadoPostEnvio.ResultadoFinal, solicitudUtc);
 			}
 
 			return new NotaComprobanteResultadoDto

@@ -69,7 +69,8 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 				await con.OpenAsync();
 				using var tx = con.BeginTransaction();
 
-				numero = await GenerarNumeroAsync(con, tx, serie);
+				numero = await FacturacionVoucherHelper.GenerarNumeroAleatorioDisponibleAsync(
+					con, tx, "08", serie, _settings.Emisor.Ruc);
 				await InsertarVoucherAsync(con, tx, voucherId, referencia, fechaEmision, serie, numero, request.Moneda, subtotal, igv, total);
 				await FacturacionVoucherHelper.InsertarPartyAsync(con, tx, voucherId, "CUSTOMER", referencia.ClienteTipoDocumento, referencia.ClienteDocumento, referencia.ClienteNombre, referencia.ClienteDireccion);
 				await InsertarItemsAsync(con, tx, voucherId, itemsCalculados, referencia);
@@ -130,11 +131,7 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 				await con.OpenAsync();
 				var estadoPostEnvio = await FacturacionVoucherHelper.ConsultarEstadoLuegoDeEnviarAsync(_facturacionSunatService, envio);
 				await FacturacionVoucherHelper.ActualizarVoucherPostEnvioAsync(con, voucherId, estadoPostEnvio.ResultadoFinal, _pdfLocalService);
-				await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", envio, solicitudUtc);
-				if (estadoPostEnvio.Consulta is not null)
-				{
-					await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "STATUS_QUERY", estadoPostEnvio.Consulta, DateTime.UtcNow);
-				}
+				await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", estadoPostEnvio.ResultadoFinal, solicitudUtc);
 			}
 
 			return CrearResultado(voucherId, referencia, serie, numero, fechaEmision, request.Moneda, subtotal, igv, total, envio, null);
@@ -252,21 +249,6 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 					throw new InvalidOperationException($"La cantidad del ítem '{item.Descripcion}' excede la del comprobante base.");
 				}
 			}
-		}
-
-		private async Task<string> GenerarNumeroAsync(SqlConnection con, SqlTransaction tx, string serie)
-		{
-			const string sql = """
-			SELECT ISNULL(MAX(TRY_CONVERT(INT, Number)), 0) + 1
-			FROM dbo.Voucher WITH (UPDLOCK, HOLDLOCK)
-			WHERE SunatTypeCode = '08' AND Series = @Series AND IssuerRuc = @Ruc;
-			""";
-			using var cmd = new SqlCommand(sql, con, tx);
-			cmd.Parameters.AddWithValue("@Series", serie);
-			cmd.Parameters.AddWithValue("@Ruc", _settings.Emisor.Ruc);
-			var next = Convert.ToInt32(await cmd.ExecuteScalarAsync());
-			if (next <= 0 || next > 99_999_999) throw new InvalidOperationException("No quedan correlativos disponibles para la nota de débito.");
-			return next.ToString("D8");
 		}
 
 		private static async Task InsertarMetadataAsync(SqlConnection con, SqlTransaction tx, Guid voucherId, string? solicitudId, DateTime fecha)

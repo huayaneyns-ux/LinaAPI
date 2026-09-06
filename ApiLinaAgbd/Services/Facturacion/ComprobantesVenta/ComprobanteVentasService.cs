@@ -523,7 +523,12 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 				using var tx = con.BeginTransaction();
 
 				await ValidarVentaSinComprobanteAsync(con, tx, request.VentaOrigenId);
-				numero = await GenerarNumeroSecuencialAsync(con, tx, tipoComprobanteSunat, serie);
+				numero = await FacturacionVoucherHelper.GenerarNumeroAleatorioDisponibleAsync(
+					con,
+					tx,
+					tipoComprobanteSunat,
+					serie,
+					_settings.Emisor.Ruc);
 
 				await InsertarVoucherPendienteAsync(con, tx, voucherId, request.VentaOrigenId, tipoComprobanteSunat, serie, numero, fechaEmision, fechaVencimiento, moneda, venta, pagoNormalizado);
 				if (DebePersistirClienteSnapshot(tipo, request.ReceptorSource, clienteFiscal))
@@ -560,11 +565,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 				await con.OpenAsync();
 				var estadoPostEnvio = await FacturacionVoucherHelper.ConsultarEstadoLuegoDeEnviarAsync(_facturacionSunatService, envio);
 				await ActualizarVoucherPostEnvioAsync(con, voucherId, estadoPostEnvio.ResultadoFinal, fechaEmision, clienteFiscal.Documento, fileName);
-				await RegistrarTransmisionAsync(con, voucherId.ToString(), "SEND", envio, solicitudUtc);
-				if (estadoPostEnvio.Consulta is not null)
-				{
-					await RegistrarTransmisionAsync(con, voucherId.ToString(), "STATUS_QUERY", estadoPostEnvio.Consulta, DateTime.UtcNow);
-				}
+				await RegistrarTransmisionAsync(con, voucherId.ToString(), "SEND", estadoPostEnvio.ResultadoFinal, solicitudUtc);
 			}
 
 			return await ObtenerComprobantePorIdAsync(voucherId.ToString());
@@ -617,30 +618,6 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 
 				throw new InvalidOperationException($"La venta ya tiene un {tipo} emitido: {serie}-{number}.");
 			}
-		}
-
-		private async Task<string> GenerarNumeroSecuencialAsync(SqlConnection con, SqlTransaction tx, string tipoComprobanteSunat, string serie)
-		{
-			const string sql = """
-				SELECT ISNULL(MAX(TRY_CONVERT(int, Number)), 0) + 1
-				FROM dbo.Voucher WITH (UPDLOCK, HOLDLOCK)
-				WHERE SunatTypeCode = @tipo
-				  AND Series = @serie
-				  AND IssuerRuc = @issuerRuc
-				  AND TRY_CONVERT(int, Number) IS NOT NULL;
-				""";
-
-			using var cmd = new SqlCommand(sql, con, tx);
-			cmd.Parameters.AddWithValue("@tipo", tipoComprobanteSunat);
-			cmd.Parameters.AddWithValue("@serie", serie);
-			cmd.Parameters.AddWithValue("@issuerRuc", _settings.Emisor.Ruc);
-			var siguiente = Convert.ToInt32(await cmd.ExecuteScalarAsync());
-			if (siguiente <= 0 || siguiente > 99_999_999)
-			{
-				throw new InvalidOperationException("Se agotó el correlativo de la serie del comprobante.");
-			}
-
-			return siguiente.ToString("D8");
 		}
 
 		private async Task InsertarVoucherPendienteAsync(
@@ -1224,7 +1201,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 				{
 					Descripcion = x.ProductoServicio,
 					Cantidad = x.Cantidad,
-					PrecioUnitario = x.Precio,
+					PrecioUnitario = Redondear(x.Precio),
 					ValorVenta = Redondear(x.Importe - x.Igv),
 					Igv = x.Igv,
 					PrecioConIgv = Redondear(x.Importe / (x.Cantidad <= 0 ? 1 : x.Cantidad)),
@@ -1272,7 +1249,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 				{
 					Descripcion = x.ProductoServicio,
 					Cantidad = x.Cantidad,
-					PrecioUnitario = x.Precio,
+					PrecioUnitario = Redondear(x.Precio),
 					ValorVenta = Redondear(x.Importe - x.Igv),
 					Igv = x.Igv,
 					PrecioConIgv = Redondear(x.Importe / (x.Cantidad <= 0 ? 1 : x.Cantidad)),

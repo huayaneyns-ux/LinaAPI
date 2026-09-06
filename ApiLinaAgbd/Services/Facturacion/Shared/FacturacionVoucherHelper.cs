@@ -217,7 +217,8 @@ namespace ApiLinaAgbd.Services.Facturacion.Shared
 
 			for (var intento = 0; intento < 100; intento++)
 			{
-				var numero = Random.Shared.Next(0, 100_000_000).ToString("D8", CultureInfo.InvariantCulture);
+				// Siempre ocho dígitos, sin correlativos bajos como 000001.
+				var numero = Random.Shared.Next(10_000_000, 100_000_000).ToString("D8", CultureInfo.InvariantCulture);
 				using var cmd = new SqlCommand(sql, con, tx);
 				cmd.Parameters.AddWithValue("@tipo", tipoComprobanteSunat);
 				cmd.Parameters.AddWithValue("@serie", serie);

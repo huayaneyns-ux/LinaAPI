@@ -30,7 +30,10 @@ namespace ApiLinaAgbd.Models.Facturacion.Ubl
 
 		public static UblNode Amount(decimal amount, string currency)
 		{
-			return Attr(amount, "currencyID", currency);
+			// SUNAT recibe los importes monetarios con máximo dos decimales.
+			// Redondear aquí evita serializar valores como 5.846666666666667
+			// producidos por divisiones o por datos históricos con mayor escala.
+			return Attr(Math.Round(amount, 2, MidpointRounding.AwayFromZero), "currencyID", currency);
 		}
 	}
 }

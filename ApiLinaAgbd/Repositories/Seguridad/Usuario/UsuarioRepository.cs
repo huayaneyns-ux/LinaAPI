@@ -22,12 +22,23 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 			{
 				con.Open();
 
-				SqlCommand cmd = new SqlCommand(
-					"USP_USU_SEL_USUARIO_LISTAR",
-					con
-				);
+				const string sql = @"
+					SELECT
+						u.id AS id_usuario,
+						u.nombre_apellido,
+						COALESCE(d.numero, '') AS dni,
+						COALESCE(u.sexo, '') AS sexo,
+						u.telefono,
+						COALESCE(u.correo, '') AS correo,
+						u.id_rol,
+						COALESCE(r.nombre, '') AS rol,
+						u.estado
+					FROM dbo.usuario u
+					LEFT JOIN dbo.documento d ON d.id = u.id_documento
+					LEFT JOIN dbo.rol r ON r.id = u.id_rol
+					ORDER BY u.id DESC;";
 
-				cmd.CommandType = CommandType.StoredProcedure;
+				using SqlCommand cmd = new(sql, con);
 
 				SqlDataReader dr = cmd.ExecuteReader();
 
@@ -68,13 +79,23 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 			{
 				con.Open();
 
-				SqlCommand cmd = new SqlCommand(
-					"USP_USU_SEL_USUARIO_OBTENER",
-					con
-				);
+				const string sql = @"
+					SELECT
+						u.id,
+						u.nombre_apellido,
+						COALESCE(d.numero, '') AS dni,
+						COALESCE(u.sexo, '') AS sexo,
+						u.telefono,
+						COALESCE(u.correo, '') AS correo,
+						u.id_rol,
+						COALESCE(r.nombre, '') AS rol,
+						u.estado
+					FROM dbo.usuario u
+					LEFT JOIN dbo.documento d ON d.id = u.id_documento
+					LEFT JOIN dbo.rol r ON r.id = u.id_rol
+					WHERE u.id = @IdUsuario;";
 
-				cmd.CommandType =
-					CommandType.StoredProcedure;
+				using SqlCommand cmd = new(sql, con);
 
 				cmd.Parameters.AddWithValue(
 					"@IdUsuario",
@@ -122,58 +143,53 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 			{
 				con.Open();
 
-				SqlCommand cmd = new SqlCommand(
-					"USP_USU_INS_UPD_USUARIO",
-					con
-				);
+				const string sql = @"
+					DECLARE @IdDocumento INT;
+					SELECT @IdDocumento = id
+					FROM dbo.documento
+					WHERE tipo_documento = 'DNI' AND numero = @DNI;
 
-				cmd.CommandType =
-					CommandType.StoredProcedure;
+					IF @IdDocumento IS NULL
+					BEGIN
+						INSERT INTO dbo.documento(tipo_documento, numero, nombre)
+						VALUES ('DNI', @DNI, @NombreApellido);
+						SET @IdDocumento = CONVERT(INT, SCOPE_IDENTITY());
+					END
 
-				cmd.Parameters.AddWithValue(
-					"@IdUsuario",
-					(object?)modelo.idUsuario ?? DBNull.Value
-				);
+					IF @IdUsuario IS NULL
+					BEGIN
+						INSERT INTO dbo.usuario
+							(nombre_apellido, sexo, telefono, correo, contrasena, estado, id_rol, id_documento)
+						VALUES
+							(@NombreApellido, @Sexo, @Telefono, @Correo, @Contrasena, @Estado, @IdRol, @IdDocumento);
+						SET @IdUsuario = CONVERT(INT, SCOPE_IDENTITY());
+					END
+					ELSE
+					BEGIN
+						UPDATE dbo.usuario
+						SET nombre_apellido = @NombreApellido,
+							sexo = @Sexo,
+							telefono = @Telefono,
+							correo = @Correo,
+							contrasena = @Contrasena,
+							estado = @Estado,
+							id_rol = @IdRol,
+							id_documento = @IdDocumento
+						WHERE id = @IdUsuario;
+					END
 
-				cmd.Parameters.AddWithValue(
-					"@NombreApellido",
-					modelo.nombreApellido
-				);
+					SELECT @IdUsuario AS IdUsuario;";
 
-				cmd.Parameters.AddWithValue(
-					"@DNI",
-					modelo.dni
-				);
-
-				cmd.Parameters.AddWithValue(
-					"@Sexo",
-					modelo.sexo
-				);
-
-				cmd.Parameters.AddWithValue(
-					"@Telefono",
-					(object?)modelo.telefono ?? DBNull.Value
-				);
-
-				cmd.Parameters.AddWithValue(
-					"@Correo",
-					modelo.correo
-				);
-
-				cmd.Parameters.AddWithValue(
-					"@Contrasena",
-					modelo.contrasena
-				);
-
-				cmd.Parameters.AddWithValue(
-					"@IdRol",
-					modelo.idRol
-				);
-
-				cmd.Parameters.AddWithValue(
-					"@Estado",
-					modelo.estado
-				);
+				using SqlCommand cmd = new(sql, con);
+				cmd.Parameters.AddWithValue("@IdUsuario", (object?)modelo.idUsuario ?? DBNull.Value);
+				cmd.Parameters.AddWithValue("@NombreApellido", modelo.nombreApellido);
+				cmd.Parameters.AddWithValue("@DNI", modelo.dni);
+				cmd.Parameters.AddWithValue("@Sexo", string.IsNullOrWhiteSpace(modelo.sexo) ? DBNull.Value : modelo.sexo);
+				cmd.Parameters.AddWithValue("@Telefono", (object?)modelo.telefono ?? DBNull.Value);
+				cmd.Parameters.AddWithValue("@Correo", modelo.correo);
+				cmd.Parameters.AddWithValue("@Contrasena", modelo.contrasena);
+				cmd.Parameters.AddWithValue("@IdRol", modelo.idRol);
+				cmd.Parameters.AddWithValue("@Estado", modelo.estado);
 
 				SqlDataReader dr =
 					cmd.ExecuteReader();
