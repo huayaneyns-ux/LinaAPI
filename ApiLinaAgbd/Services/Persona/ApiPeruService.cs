@@ -55,7 +55,7 @@ namespace ApiLinaAgbd.Services.Persona
 				};
 			}
 
-			// 1. Consultar primero en base de datos mediante sp_BuscarNombrePersona
+			// Primero se consulta la base de datos. API Perú solo se usa cuando el documento no existe.
 			var personaBd = _personaRepository.Buscar(tipoDocumento, numero);
 			if (personaBd != null)
 			{
@@ -65,31 +65,37 @@ namespace ApiLinaAgbd.Services.Persona
 					Mensaje = "Persona encontrada en base de datos.",
 					Numero = personaBd.Numero,
 					Nombre = personaBd.Nombre,
+					Direccion = personaBd.Direccion,
 					Origen = "BD"
 				};
 			}
 
-			// 2. Si no existe en BD, consultar a ApiPeru
 			var personaApi = await ConsultarApiPeruAsync(tipoDocumento, numero);
-			if (personaApi == null || string.IsNullOrWhiteSpace(personaApi.Nombre))
+			if (personaApi != null && !string.IsNullOrWhiteSpace(personaApi.Nombre))
 			{
+				_personaRepository.Registrar(
+					tipoDocumento,
+					personaApi.Numero ?? numero,
+					personaApi.Nombre,
+					personaApi.Direccion,
+					personaApi.Ubigeo);
+
 				return new PersonaResponseDto
 				{
-					Success = false,
-					Mensaje = $"No se encontró información en ApiPeru para {tipoDocumento}: {numero}."
+					Success = true,
+					Mensaje = "Persona obtenida de ApiPeru y registrada en base de datos.",
+					Numero = personaApi.Numero ?? numero,
+					Nombre = personaApi.Nombre,
+					Direccion = personaApi.Direccion,
+					Ubigeo = personaApi.Ubigeo,
+					Origen = "API"
 				};
 			}
 
-			// 3. Crear en base de datos mediante sp_CrearDocumento
-			_personaRepository.Registrar(tipoDocumento, personaApi.Numero ?? numero, personaApi.Nombre);
-
 			return new PersonaResponseDto
 			{
-				Success = true,
-				Mensaje = "Persona obtenida de ApiPeru y registrada en base de datos.",
-				Numero = personaApi.Numero ?? numero,
-				Nombre = personaApi.Nombre,
-				Origen = "API"
+				Success = false,
+				Mensaje = $"No se encontró información en ApiPeru para {tipoDocumento}: {numero}."
 			};
 		}
 
@@ -126,7 +132,15 @@ namespace ApiLinaAgbd.Services.Persona
 							? result.Data.Numero.Trim()
 							: numero;
 
-						return new PersonaData { Numero = num, Nombre = nombre };
+						return new PersonaData
+						{
+							Numero = num,
+							Nombre = nombre,
+							Direccion = string.IsNullOrWhiteSpace(result.Data.DireccionCompleta)
+								? result.Data.Direccion
+								: result.Data.DireccionCompleta,
+							Ubigeo = NormalizarUbigeo(result.Data.Ubigeo, result.Data.UbigeoSunat)
+						};
 					}
 				}
 				else if (tipoDocumento == "RUC")
@@ -148,7 +162,15 @@ namespace ApiLinaAgbd.Services.Persona
 							? result.Data.Ruc.Trim()
 							: numero;
 
-						return new PersonaData { Numero = num, Nombre = nombre };
+						return new PersonaData
+						{
+							Numero = num,
+							Nombre = nombre,
+							Direccion = string.IsNullOrWhiteSpace(result.Data.DireccionCompleta)
+								? result.Data.Direccion
+								: result.Data.DireccionCompleta,
+							Ubigeo = NormalizarUbigeo(result.Data.Ubigeo, result.Data.UbigeoSunat)
+						};
 					}
 				}
 			}
@@ -158,6 +180,12 @@ namespace ApiLinaAgbd.Services.Persona
 			}
 
 			return null;
+		}
+
+		private static string? NormalizarUbigeo(string[]? ubigeo, string? ubigeoSunat)
+		{
+			var completo = ubigeo?.LastOrDefault(x => !string.IsNullOrWhiteSpace(x) && x.Trim().Length == 6);
+			return string.IsNullOrWhiteSpace(completo) ? ubigeoSunat?.Trim() : completo.Trim();
 		}
 	}
 }

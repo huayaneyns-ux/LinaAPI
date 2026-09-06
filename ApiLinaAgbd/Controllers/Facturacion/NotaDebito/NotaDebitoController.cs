@@ -16,13 +16,19 @@ namespace ApiLinaAgbd.Controllers.Facturacion.NotaDebito
 			_notaDebitoService = notaDebitoService;
 		}
 
+		[HttpGet("comprobantes/notas/debito/bases")]
+		public async Task<IActionResult> ListarBases()
+		{
+			return Ok(await _notaDebitoService.ListarBasesAsync());
+		}
+
 		[HttpPost("comprobantes/notas/debito")]
 		public async Task<IActionResult> EmitirNotaDebito([FromBody] NotaDebitoEmitirRequestDto request)
 		{
 			try
 			{
 				var resultado = await _notaDebitoService.EmitirAsync(request);
-				return Ok(resultado);
+				return resultado.EstadoSunat == "PENDIENTE_ENVIO" ? Accepted(resultado) : Ok(resultado);
 			}
 			catch (InvalidOperationException ex)
 			{

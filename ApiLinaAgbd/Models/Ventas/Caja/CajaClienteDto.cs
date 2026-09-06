@@ -4,12 +4,18 @@
 	{
 		public int Id { get; set; }
 
-		public string NombreApellido { get; set; }
+		public string NombreApellido { get; set; } = string.Empty;
 
-		public string DNI { get; set; }
+		public string DNI { get; set; } = string.Empty;
 
-		public string Telefono { get; set; }
+		public string TipoDocumento { get; set; } = "DNI";
 
-		public string Correo { get; set; }
+		public string Documento { get; set; } = string.Empty;
+
+		public string Direccion { get; set; } = string.Empty;
+
+		public string Telefono { get; set; } = string.Empty;
+
+		public string Correo { get; set; } = string.Empty;
 	}
 }

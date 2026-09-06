@@ -26,14 +26,15 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Auth
 					SELECT TOP 1
 						u.id,
 						COALESCE(u.nombre_apellido, '') AS nombre_apellido,
-						COALESCE(u.dni, '') AS dni,
+						COALESCE(d.numero, '') AS dni,
 						COALESCE(u.correo, '') AS correo,
 						COALESCE(u.telefono, '') AS telefono,
 						COALESCE(r.nombre, 'CLIENTE') AS rol,
 						u.estado
 					FROM Usuario u
+					LEFT JOIN Documento d ON d.id = u.id_documento
 					LEFT JOIN Rol r ON r.id = u.id_rol
-					WHERE (u.correo = @usuario OR u.dni = @usuario)
+					WHERE (u.correo = @usuario OR d.numero = @usuario)
 					  AND u.contrasena = @contrasena;";
 
 				SqlCommand cmd = new SqlCommand(sql, con);

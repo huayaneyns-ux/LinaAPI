@@ -5,6 +5,6 @@ namespace ApiLinaAgbd.Repositories.Persona
 	public interface IPersonaRepository
 	{
 		PersonaData? Buscar(string tipoDocumento, string numero);
-		void Registrar(string tipoDocumento, string numero, string nombreApellido);
+		int Registrar(string tipoDocumento, string numero, string nombreApellido, string? direccion, string? ubigeo);
 	}
 }

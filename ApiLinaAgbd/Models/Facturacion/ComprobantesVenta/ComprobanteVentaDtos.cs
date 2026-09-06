@@ -10,8 +10,8 @@ namespace ApiLinaAgbd.Models.Facturacion.ComprobantesVenta
 		[Range(1, int.MaxValue)]
 		public int VentaOrigenId { get; set; }
 
-		[Required]
-		public string FechaEmision { get; set; } = string.Empty;
+		// La fecha se calcula en el servidor; el cliente no puede elegirla.
+		public string? FechaEmision { get; set; }
 
 		public string? FechaVencimiento { get; set; }
 
@@ -69,6 +69,8 @@ namespace ApiLinaAgbd.Models.Facturacion.ComprobantesVenta
 		public string Codigo { get; set; } = string.Empty;
 
 		public string Fecha { get; set; } = string.Empty;
+
+		public string FechaEmisionServidor { get; set; } = string.Empty;
 
 		public ComprobanteVentaClienteDto Cliente { get; set; } = new();
 

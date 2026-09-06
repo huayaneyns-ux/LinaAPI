@@ -503,14 +503,16 @@ namespace ApiLinaAgbd.Services.Facturacion.Documentos
 			}
 
 			var solicitudUtc = DateTime.UtcNow;
-			object body = voucher.Tipo switch
+			object body;
+			if (voucher.Tipo == "BOLETA")
 			{
-				"BOLETA" => _boletaBuilder.Build(CrearBoletaRequest(voucher)),
-				"FACTURA" => _facturaBuilder.Build(CrearFacturaRequest(voucher)),
-				_ => throw new InvalidOperationException($"El tipo {voucher.Tipo} no admite reenvío.")
-			};
-
-			if (voucher.Tipo == "NOTA_CREDITO")
+				body = _boletaBuilder.Build(CrearBoletaRequest(voucher));
+			}
+			else if (voucher.Tipo == "FACTURA")
+			{
+				body = _facturaBuilder.Build(CrearFacturaRequest(voucher));
+			}
+			else if (voucher.Tipo == "NOTA_CREDITO")
 			{
 				body = await CrearNotaCreditoAsync(voucher);
 			}
@@ -521,6 +523,10 @@ namespace ApiLinaAgbd.Services.Facturacion.Documentos
 			else if (voucher.Tipo == "LIQUIDACION_COMPRA")
 			{
 				body = await CrearLiquidacionAsync(voucher);
+			}
+			else
+			{
+				throw new InvalidOperationException($"El tipo {voucher.Tipo} no admite reenvío.");
 			}
 
 			var fileName = voucher.FileName ?? $"{_settings.Emisor.Ruc}-{ObtenerTipoSunatDoc(voucher.Tipo)}-{voucher.Serie}-{voucher.Numero}";
