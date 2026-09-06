@@ -6,8 +6,51 @@ using ApiLinaAgbd.Models.Facturacion;
 
 namespace ApiLinaAgbd.Services.Facturacion.Shared
 {
+	internal sealed record ResultadoSunatPostEnvio(
+		FacturacionEnvioResultado ResultadoFinal,
+		FacturacionEnvioResultado? Consulta);
+
 	internal static class FacturacionVoucherHelper
 	{
+		internal static async Task<ResultadoSunatPostEnvio> ConsultarEstadoLuegoDeEnviarAsync(
+			FacturacionSunatService sunatService,
+			FacturacionEnvioResultado envio)
+		{
+			if (!envio.Exitoso || string.IsNullOrWhiteSpace(envio.DocumentId))
+			{
+				return new ResultadoSunatPostEnvio(envio, null);
+			}
+
+			FacturacionEnvioResultado? ultimaConsulta = null;
+			for (var intento = 1; intento <= 5; intento++)
+			{
+				ultimaConsulta = await sunatService.ObtenerDocumentoPorId(envio.DocumentId);
+				if (!ultimaConsulta.Exitoso || !EsEstadoPendiente(ultimaConsulta.EstadoSunat) || intento == 5)
+				{
+					break;
+				}
+
+				await Task.Delay(TimeSpan.FromSeconds(1));
+			}
+
+			if (ultimaConsulta?.Exitoso == true &&
+				ExtraerUrlsPdf(ultimaConsulta.RespuestaApi) is (null, null, null, null))
+			{
+				// getById normalmente devuelve estado/XML/CDR, mientras que sendBill
+				// devuelve las URLs de los PDFs. Se conserva ese bloque para que la
+				// descarga local use el estado ya confirmado y los PDFs del envío.
+				ultimaConsulta.RespuestaApi = envio.RespuestaApi;
+			}
+
+			return new ResultadoSunatPostEnvio(
+				ultimaConsulta?.Exitoso == true ? ultimaConsulta : envio,
+				ultimaConsulta);
+		}
+
+		private static bool EsEstadoPendiente(string? estado) =>
+			string.Equals(estado?.Trim(), "PENDIENTE", StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(estado?.Trim(), "PENDING", StringComparison.OrdinalIgnoreCase);
+
 		internal static DateTime ParsearFechaObligatoria(string? fechaTexto, string mensaje)
 		{
 			if (!DateTime.TryParse(fechaTexto, CultureInfo.InvariantCulture, DateTimeStyles.None, out var fecha))
@@ -422,7 +465,9 @@ namespace ApiLinaAgbd.Services.Facturacion.Shared
 				""";
 
 			var urlsPdf = ExtraerUrlsPdf(envio.RespuestaApi);
-			var urlsPdfLocales = await pdfLocalService.GuardarDesdeUrlsAsync(voucherId, urlsPdf);
+			var metadata = await ObtenerMetadataPdfAsync(con, voucherId, envio.FileName);
+			var urlsPdfLocales = pdfLocalService.ObtenerUrlsPublicas(voucherId, urlsPdf, metadata);
+			pdfLocalService.ProgramarGuardadoDesdeUrls(voucherId, urlsPdf, metadata);
 			using var cmd = new SqlCommand(sql, con);
 			cmd.Parameters.AddWithValue("@Id", voucherId);
 			cmd.Parameters.Add("@SunatStatus", SqlDbType.VarChar, 30).Value = NormalizarSunatStatusParaVoucher(envio);
@@ -434,6 +479,43 @@ namespace ApiLinaAgbd.Services.Facturacion.Shared
 			cmd.Parameters.AddWithValue("@Pdf58mmUrl", (object?)urlsPdfLocales.Ticket58 ?? DBNull.Value);
 			cmd.Parameters.AddWithValue("@Pdf80mmUrl", (object?)urlsPdfLocales.Ticket80 ?? DBNull.Value);
 			await cmd.ExecuteNonQueryAsync();
+		}
+
+		private static async Task<FacturacionPdfLocalService.PdfStorageMetadata> ObtenerMetadataPdfAsync(
+			SqlConnection con,
+			Guid voucherId,
+			string? fileName)
+		{
+			const string sql = """
+				SELECT TOP 1
+					v.IssueDate,
+					v.IssuerRuc,
+					v.SunatTypeCode,
+					v.Series,
+					v.Number,
+					vp.DocumentNumber
+				FROM dbo.Voucher v
+				LEFT JOIN dbo.VoucherParty vp ON vp.VoucherId = v.Id AND vp.Role = 'CUSTOMER'
+				WHERE v.Id = @Id;
+				""";
+
+			using var cmd = new SqlCommand(sql, con);
+			cmd.Parameters.AddWithValue("@Id", voucherId);
+			using var dr = await cmd.ExecuteReaderAsync();
+			if (!await dr.ReadAsync())
+			{
+				return new FacturacionPdfLocalService.PdfStorageMetadata(
+					DateTime.Now,
+					"SIN_DOCUMENTO",
+					fileName ?? voucherId.ToString("D"));
+			}
+
+			var issueDate = dr["IssueDate"] == DBNull.Value ? DateTime.Now : Convert.ToDateTime(dr["IssueDate"]);
+			var customerDocument = dr["DocumentNumber"] == DBNull.Value ? "SIN_DOCUMENTO" : dr["DocumentNumber"]?.ToString();
+			var voucherCode = string.IsNullOrWhiteSpace(fileName)
+				? $"{dr["IssuerRuc"]}-{dr["SunatTypeCode"]}-{dr["Series"]}-{dr["Number"]}"
+				: fileName;
+			return new FacturacionPdfLocalService.PdfStorageMetadata(issueDate, customerDocument ?? "SIN_DOCUMENTO", voucherCode);
 		}
 
 		internal static async Task ActualizarVoucherPostFalloComunicacionAsync(SqlConnection con, Guid voucherId)

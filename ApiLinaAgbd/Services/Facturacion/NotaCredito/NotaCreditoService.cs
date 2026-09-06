@@ -243,8 +243,13 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaCredito
 			using (var con = _repository.CreateConnection())
 			{
 				await con.OpenAsync();
-				await FacturacionVoucherHelper.ActualizarVoucherPostEnvioAsync(con, voucherId, envio, _pdfLocalService);
+				var estadoPostEnvio = await FacturacionVoucherHelper.ConsultarEstadoLuegoDeEnviarAsync(_facturacionSunatService, envio);
+				await FacturacionVoucherHelper.ActualizarVoucherPostEnvioAsync(con, voucherId, estadoPostEnvio.ResultadoFinal, _pdfLocalService);
 				await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", envio, solicitudUtc);
+				if (estadoPostEnvio.Consulta is not null)
+				{
+					await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "STATUS_QUERY", estadoPostEnvio.Consulta, DateTime.UtcNow);
+				}
 			}
 
 			return new NotaComprobanteResultadoDto

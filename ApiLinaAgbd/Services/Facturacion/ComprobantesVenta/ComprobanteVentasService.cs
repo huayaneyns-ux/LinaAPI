@@ -556,8 +556,13 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 			using (var con = _repository.CreateConnection())
 			{
 				await con.OpenAsync();
-				await ActualizarVoucherPostEnvioAsync(con, voucherId, envio);
+				var estadoPostEnvio = await FacturacionVoucherHelper.ConsultarEstadoLuegoDeEnviarAsync(_facturacionSunatService, envio);
+				await ActualizarVoucherPostEnvioAsync(con, voucherId, estadoPostEnvio.ResultadoFinal, fechaEmision, clienteFiscal.Documento, fileName);
 				await RegistrarTransmisionAsync(con, voucherId.ToString(), "SEND", envio, solicitudUtc);
+				if (estadoPostEnvio.Consulta is not null)
+				{
+					await RegistrarTransmisionAsync(con, voucherId.ToString(), "STATUS_QUERY", estadoPostEnvio.Consulta, DateTime.UtcNow);
+				}
 			}
 
 			return await ObtenerComprobantePorIdAsync(voucherId.ToString());
@@ -879,7 +884,13 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 			}
 		}
 
-		private async Task ActualizarVoucherPostEnvioAsync(SqlConnection con, Guid voucherId, FacturacionEnvioResultado envio)
+		private async Task ActualizarVoucherPostEnvioAsync(
+			SqlConnection con,
+			Guid voucherId,
+			FacturacionEnvioResultado envio,
+			DateTime fechaEmision,
+			string? documentoCliente,
+			string fileName)
 		{
 			const string sql = """
 				UPDATE dbo.Voucher
@@ -900,7 +911,12 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 				""";
 
 			var urlsPdf = ExtraerUrlsPdf(envio.RespuestaApi);
-			var urlsPdfLocales = await _pdfLocalService.GuardarDesdeUrlsAsync(voucherId, urlsPdf);
+			var metadata = new FacturacionPdfLocalService.PdfStorageMetadata(
+				fechaEmision,
+				documentoCliente ?? "SIN_DOCUMENTO",
+				fileName);
+			var urlsPdfLocales = _pdfLocalService.ObtenerUrlsPublicas(voucherId, urlsPdf, metadata);
+			_pdfLocalService.ProgramarGuardadoDesdeUrls(voucherId, urlsPdf, metadata);
 			var sunatStatus = NormalizarSunatStatusParaVoucher(envio);
 			using var cmd = new SqlCommand(sql, con);
 			cmd.Parameters.AddWithValue("@Id", voucherId);
