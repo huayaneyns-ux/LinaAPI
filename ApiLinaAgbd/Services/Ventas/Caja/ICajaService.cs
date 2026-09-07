@@ -6,7 +6,8 @@ namespace ApiLinaAgbd.Services.Ventas.Caja
 	{
 		int RegistrarVenta(CajaVentaInsertDto venta);
 		CajaClienteDto? BuscarCliente(string dni);
-		int CrearCliente(CajaClienteInsertDto cliente);
+		Task<CajaClienteDto?> BuscarClientePorDocumentoAsync(string tipoDocumento, string numero);
+		Task<CajaClienteDto?> CrearClienteAsync(CajaClienteInsertDto cliente);
 		void RegistrarPago(int id, CajaPagoInsertDto pago);
 	}
 }

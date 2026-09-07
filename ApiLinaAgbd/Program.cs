@@ -175,6 +175,7 @@ builder.Services.AddHttpClient<IApiPeruService, ApiPeruService>((sp, client) =>
 		: settings.BaseUrl.TrimEnd('/') + "/";
 
 	client.BaseAddress = new Uri(baseUrl);
+	client.Timeout = TimeSpan.FromSeconds(15);
 });
 
 builder.Services.AddCors(options =>

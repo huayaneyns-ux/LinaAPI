@@ -159,9 +159,9 @@ namespace ApiLinaAgbd.Services.Facturacion.Shared
 				var cuerpo = await response.Content.ReadAsStringAsync();
 				var respuestaApi = ParsearCuerpo(cuerpo);
 				var fileName = ObtenerValor(respuestaApi, "fileName");
-				var xmlUrl = ObtenerValor(respuestaApi, "xml");
-				var cdrUrl = ObtenerValor(respuestaApi, "cdr");
-				var estadoSunat = ObtenerValor(respuestaApi, "status");
+				var xmlUrl = ObtenerValorRecursivo(respuestaApi, "xml") ?? ObtenerValorRecursivo(respuestaApi, "xmlUrl");
+				var cdrUrl = ObtenerValorRecursivo(respuestaApi, "cdr") ?? ObtenerValorRecursivo(respuestaApi, "cdrUrl");
+				var estadoSunat = ObtenerValorRecursivo(respuestaApi, "status") ?? ObtenerValorRecursivo(respuestaApi, "sunatStatus");
 				var mensajeSunat = ObtenerMensajeDocumento(respuestaApi);
 
 				return new FacturacionEnvioResultado
@@ -423,6 +423,46 @@ namespace ApiLinaAgbd.Services.Facturacion.Shared
 				JsonValueKind.False => bool.FalseString,
 				_ => value.ToString()
 			};
+		}
+
+		private static string? ObtenerValorRecursivo(object? origen, string propiedad)
+		{
+			if (origen is not JsonElement element)
+			{
+				return null;
+			}
+
+			if (element.ValueKind == JsonValueKind.Object)
+			{
+				foreach (var property in element.EnumerateObject())
+				{
+					if (string.Equals(property.Name, propiedad, StringComparison.OrdinalIgnoreCase))
+					{
+						return property.Value.ValueKind == JsonValueKind.String
+							? property.Value.GetString()
+							: property.Value.ToString();
+					}
+
+					var encontrado = ObtenerValorRecursivo(property.Value, propiedad);
+					if (!string.IsNullOrWhiteSpace(encontrado))
+					{
+						return encontrado;
+					}
+				}
+			}
+			else if (element.ValueKind == JsonValueKind.Array)
+			{
+				foreach (var item in element.EnumerateArray())
+				{
+					var encontrado = ObtenerValorRecursivo(item, propiedad);
+					if (!string.IsNullOrWhiteSpace(encontrado))
+					{
+						return encontrado;
+					}
+				}
+			}
+
+			return null;
 		}
 
 		private static string? ObtenerMensajeDocumento(object? respuestaApi)

@@ -22,6 +22,8 @@ namespace ApiLinaAgbd.Models.ApiPeru
 		public string Mensaje { get; set; } = string.Empty;
 		public string? Numero { get; set; }
 		public string? Nombre { get; set; }
+		public string? Direccion { get; set; }
+		public string? Ubigeo { get; set; }
 		public string? Origen { get; set; }
 	}
 
@@ -68,6 +70,9 @@ namespace ApiLinaAgbd.Models.ApiPeru
 
 		[JsonPropertyName("ubigeo_sunat")]
 		public string? UbigeoSunat { get; set; }
+
+		[JsonPropertyName("ubigeo")]
+		public string[]? Ubigeo { get; set; }
 	}
 
 	public class ApiPeruRucResponse
@@ -113,5 +118,8 @@ namespace ApiLinaAgbd.Models.ApiPeru
 
 		[JsonPropertyName("ubigeo_sunat")]
 		public string? UbigeoSunat { get; set; }
+
+		[JsonPropertyName("ubigeo")]
+		public string[]? Ubigeo { get; set; }
 	}
 }

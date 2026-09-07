@@ -5,7 +5,6 @@ using ApiLinaAgbd.Models.Facturacion.NotaDebito;
 using ApiLinaAgbd.Models.Facturacion.Notas;
 using ApiLinaAgbd.Models.Facturacion.Ubl;
 using ApiLinaAgbd.Repositories.Facturacion.NotaDebito;
-using ApiLinaAgbd.Services.Facturacion.NotaCredito;
 using ApiLinaAgbd.Services.Facturacion.Shared;
 using Microsoft.Extensions.Options;
 
@@ -14,13 +13,11 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 	public class NotaDebitoService : INotaDebitoService
 	{
 		private const string CodigoAfectacionIgvGravado = "10";
-		private const string DescripcionPenalidadDefault = "Penalidad por cambio posterior a la venta";
-		private const string UnidadMedidaDefault = "NIU";
+		private const string UnidadMedidaServicio = "ZZ";
 
 		private const string SerieFactura = "FD01";
 		private const string SerieBoleta = "BD01";
 		private readonly INotaDebitoRepository _repository;
-		private readonly INotaCreditoService _notaCreditoService;
 		private readonly NotaDebitoUblBuilder _builder;
 		private readonly FacturacionSunatService _facturacionSunatService;
 		private readonly FacturacionPdfLocalService _pdfLocalService;
@@ -28,14 +25,12 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 
 		public NotaDebitoService(
 			INotaDebitoRepository repository,
-			INotaCreditoService notaCreditoService,
 			NotaDebitoUblBuilder builder,
 			FacturacionSunatService facturacionSunatService,
 			FacturacionPdfLocalService pdfLocalService,
 			IOptions<FacturacionSettings> options)
 		{
 			_repository = repository;
-			_notaCreditoService = notaCreditoService;
 			_builder = builder;
 			_facturacionSunatService = facturacionSunatService;
 			_pdfLocalService = pdfLocalService;
@@ -49,8 +44,15 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 				throw new InvalidOperationException("Falta FacturacionSettings:Emisor:Ruc o RazonSocial.");
 			}
 
-			var referencia = (await _notaCreditoService.ListarComprobantesBaseAsync()).FirstOrDefault(x => x.Id == request.VoucherReferenciaId)
+			var referencia = (await _repository.ListarComprobantesBaseAsync()).FirstOrDefault(x =>
+				string.Equals(x.Id?.Trim(), request.VoucherReferenciaId?.Trim(), StringComparison.OrdinalIgnoreCase))
 				?? throw new InvalidOperationException("El comprobante base no existe.");
+			if (referencia.SunatTypeCode is not ("01" or "03"))
+				throw new InvalidOperationException("Una nota de débito solo puede referenciar una factura o boleta.");
+			if (request.Motivo is null || request.Motivo.Codigo is not ("01" or "02"))
+				throw new InvalidOperationException("La nota de débito solo admite los motivos 01 (intereses por mora) y 02 (aumento en el valor).");
+			if (request.Moneda is not ("PEN" or "USD") || !string.Equals(request.Moneda, referencia.Moneda, StringComparison.OrdinalIgnoreCase))
+				throw new InvalidOperationException("La moneda de la nota debe coincidir con la del comprobante base y ser PEN o USD.");
 
 			var items = PrepararItems(request, referencia);
 			var itemsCalculados = CalcularItems(items, request.IgvPorcentaje);
@@ -58,22 +60,34 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 			var subtotal = FacturacionVoucherHelper.Redondear(itemsCalculados.Sum(x => x.ValorVenta));
 			var igv = FacturacionVoucherHelper.Redondear(itemsCalculados.Sum(x => x.Igv));
 			var total = FacturacionVoucherHelper.Redondear(itemsCalculados.Sum(x => x.Importe));
-			var fechaEmision = FacturacionVoucherHelper.ParsearFechaObligatoria(request.FechaEmision, "La fecha de emisión no es válida.");
+			var fechaEmision = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(DateTime.UtcNow, "America/Lima").Date;
 			var serie = referencia.SunatTypeCode == "01" ? SerieFactura : SerieBoleta;
 			var voucherId = Guid.NewGuid();
 			string numero;
+
+			if (request.Motivo.Codigo == "02")
+			{
+				using var validacionCon = _repository.CreateConnection();
+				await validacionCon.OpenAsync();
+				await FacturacionVoucherHelper.ValidarAumentoValorAsync(
+					validacionCon,
+					Guid.Parse(referencia.Id),
+					items.Select(x => (x.VoucherItemReferenciaId, x.Cantidad, x.Ambito)).ToList());
+			}
 
 			using (var con = _repository.CreateConnection())
 			{
 				await con.OpenAsync();
 				using var tx = con.BeginTransaction();
 
-				numero = await FacturacionVoucherHelper.GenerarNumeroAleatorioDisponibleAsync(con, tx, "08", serie, _settings.Emisor.Ruc);
+				numero = await FacturacionVoucherHelper.GenerarNumeroAleatorioDisponibleAsync(
+					con, tx, "08", serie, _settings.Emisor.Ruc);
 				await InsertarVoucherAsync(con, tx, voucherId, referencia, fechaEmision, serie, numero, request.Moneda, subtotal, igv, total);
 				await FacturacionVoucherHelper.InsertarPartyAsync(con, tx, voucherId, "CUSTOMER", referencia.ClienteTipoDocumento, referencia.ClienteDocumento, referencia.ClienteNombre, referencia.ClienteDireccion);
 				await InsertarItemsAsync(con, tx, voucherId, itemsCalculados, referencia);
 				await FacturacionVoucherHelper.InsertarAdjustmentAsync(con, tx, voucherId, Guid.Parse(referencia.Id), request.Motivo.Codigo, request.Motivo.Descripcion);
 				await FacturacionVoucherHelper.InsertarObservacionesAsync(con, tx, voucherId, request.Observaciones);
+				await InsertarMetadataAsync(con, tx, voucherId, request.SolicitudId, fechaEmision);
 				tx.Commit();
 			}
 
@@ -83,7 +97,7 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 				Correlativo = numero,
 				FechaEmision = fechaEmision.ToString("yyyy-MM-dd"),
 				HoraEmision = request.HoraEmision,
-				Moneda = request.Moneda,
+					Moneda = request.Moneda,
 				DocumentoReferencia = new UblReferenceDocumentPayloadDto
 				{
 					Id = $"{referencia.Serie}-{referencia.Numero}",
@@ -120,16 +134,24 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 				await conFallo.OpenAsync();
 				await FacturacionVoucherHelper.ActualizarVoucherPostFalloComunicacionAsync(conFallo, voucherId);
 				await FacturacionVoucherHelper.RegistrarTransmisionAsync(conFallo, voucherId, "SEND", envio, solicitudUtc);
-				throw new InvalidOperationException(envio.DetalleError ?? envio.MensajeSunat ?? envio.Mensaje);
+				return CrearResultado(voucherId, referencia, serie, numero, fechaEmision, request.Moneda, subtotal, igv, total, envio, "PENDIENTE_ENVIO");
 			}
 
 			using (var con = _repository.CreateConnection())
 			{
 				await con.OpenAsync();
-				await FacturacionVoucherHelper.ActualizarVoucherPostEnvioAsync(con, voucherId, envio, _pdfLocalService);
-				await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", envio, solicitudUtc);
+				var estadoPostEnvio = await FacturacionVoucherHelper.ConsultarEstadoLuegoDeEnviarAsync(_facturacionSunatService, envio);
+				await FacturacionVoucherHelper.ActualizarVoucherPostEnvioAsync(con, voucherId, estadoPostEnvio.ResultadoFinal, _pdfLocalService);
+				await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, voucherId, "SEND", estadoPostEnvio.ResultadoFinal, solicitudUtc);
 			}
 
+			return CrearResultado(voucherId, referencia, serie, numero, fechaEmision, request.Moneda, subtotal, igv, total, envio, null);
+		}
+
+		public Task<List<NotaComprobanteBaseDisponibleDto>> ListarBasesAsync() => _repository.ListarComprobantesBaseAsync();
+
+		private NotaComprobanteResultadoDto CrearResultado(Guid voucherId, NotaComprobanteBaseDisponibleDto referencia, string serie, string numero, DateTime fechaEmision, string moneda, decimal subtotal, decimal igv, decimal total, FacturacionEnvioResultado envio, string? estadoForzado)
+		{
 			return new NotaComprobanteResultadoDto
 			{
 				Id = voucherId.ToString(),
@@ -137,8 +159,8 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 				Serie = serie,
 				Numero = numero,
 				FechaEmision = fechaEmision.ToString("yyyy-MM-dd"),
-				Moneda = request.Moneda,
-				EstadoSunat = FacturacionVoucherHelper.MapearEstadoSunatUi(FacturacionVoucherHelper.NormalizarSunatStatusParaVoucher(envio)),
+					Moneda = moneda,
+				EstadoSunat = estadoForzado ?? FacturacionVoucherHelper.MapearEstadoSunatUi(FacturacionVoucherHelper.NormalizarSunatStatusParaVoucher(envio)),
 				DocumentId = envio.DocumentId,
 				CodigoRespuestaSunat = envio.CodigoRespuestaSunat ?? string.Empty,
 				MensajeSunat = envio.MensajeSunat ?? envio.Mensaje ?? string.Empty,
@@ -153,33 +175,29 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 
 		private static List<NotaDebitoItemEmitirDto> PrepararItems(NotaDebitoEmitirRequestDto request, NotaComprobanteBaseDisponibleDto referencia)
 		{
-			if (request.Motivo.Codigo == "03")
-			{
-				return request.Items.Select(item => new NotaDebitoItemEmitirDto
-				{
-					Descripcion = string.IsNullOrWhiteSpace(item.Descripcion)
-						? DescripcionPenalidadDefault
-						: item.Descripcion.Trim(),
-					Cantidad = 1m,
-					PrecioUnitario = item.PrecioUnitario,
-					UnidadMedida = UnidadMedidaDefault
-				}).ToList();
-			}
-
 			return request.Items.Select(item =>
 			{
-				var itemBase = ResolverItemBase(referencia, item)
-					?? throw new InvalidOperationException("No se pudo identificar el ítem del comprobante base. Envíe VoucherItemReferenciaId, ProductoId o Código válidos.");
+				var itemBase = request.Motivo.Codigo == "01" ? null : ResolverItemBase(referencia, item);
+				if (string.Equals(item.Ambito, "ITEM", StringComparison.OrdinalIgnoreCase) && itemBase is null)
+					throw new InvalidOperationException("El ítem indicado no pertenece al comprobante base.");
+				var esAbstracto = string.Equals(item.Ambito, "COMPROBANTE", StringComparison.OrdinalIgnoreCase) || itemBase is null;
+				var monto = item.MontoAdicionalSinIgv ?? item.PrecioUnitario;
+				if (monto <= 0) throw new InvalidOperationException("Cada ítem debe indicar un monto adicional sin IGV mayor que cero.");
 
 				return new NotaDebitoItemEmitirDto
 				{
-					VoucherItemReferenciaId = string.IsNullOrWhiteSpace(item.VoucherItemReferenciaId) ? itemBase.Id : item.VoucherItemReferenciaId,
-					ProductoId = item.ProductoId ?? itemBase.ProductoId,
-					Codigo = string.IsNullOrWhiteSpace(item.Codigo) ? itemBase.Codigo : item.Codigo,
-					Descripcion = string.IsNullOrWhiteSpace(item.Descripcion) ? itemBase.Descripcion : item.Descripcion,
-					Cantidad = item.Cantidad,
-					PrecioUnitario = item.PrecioUnitario > 0 ? item.PrecioUnitario : itemBase.PrecioUnitario,
-					UnidadMedida = string.IsNullOrWhiteSpace(item.UnidadMedida) ? itemBase.UnidadMedida : item.UnidadMedida
+					Ambito = esAbstracto ? "COMPROBANTE" : "ITEM",
+					VoucherItemReferenciaId = esAbstracto ? null : itemBase!.Id,
+					ProductoId = esAbstracto ? null : itemBase!.ProductoId,
+					Codigo = esAbstracto ? null : itemBase!.Codigo,
+					Descripcion = string.IsNullOrWhiteSpace(item.Descripcion)
+						? request.Motivo.Codigo == "01"
+							? $"Intereses moratorios por pago fuera de fecha de {(referencia.SunatTypeCode == "01" ? "la Factura" : "la Boleta")} {referencia.Serie}-{referencia.Numero}"
+							: "Ajuste en el valor del comprobante"
+						: item.Descripcion.Trim(),
+					Cantidad = esAbstracto ? 1m : item.Cantidad,
+					PrecioUnitario = monto,
+					UnidadMedida = esAbstracto ? UnidadMedidaServicio : (string.IsNullOrWhiteSpace(item.UnidadMedida) ? itemBase!.UnidadMedida : item.UnidadMedida)
 				};
 			}).ToList();
 		}
@@ -196,6 +214,7 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 
 				return new NotaDebitoItemCalculado
 				{
+					Ambito = item.Ambito,
 					VoucherItemReferenciaId = item.VoucherItemReferenciaId,
 					ProductoId = item.ProductoId,
 					Codigo = item.Codigo,
@@ -214,11 +233,6 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 
 		private static void ValidarSolicitud(NotaDebitoEmitirRequestDto request, NotaComprobanteBaseDisponibleDto referencia, List<NotaDebitoItemCalculado> items)
 		{
-			if (request.Motivo.Codigo is not ("01" or "02" or "03" or "11"))
-			{
-				throw new InvalidOperationException("El código del motivo de nota de débito no es válido.");
-			}
-
 			if (string.IsNullOrWhiteSpace(request.Motivo.Descripcion))
 			{
 				throw new InvalidOperationException("La descripción del motivo es obligatoria.");
@@ -236,22 +250,33 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 					throw new InvalidOperationException("Todos los ítems de la nota de débito deben ser válidos.");
 				}
 
-				if (request.Motivo.Codigo == "03")
-				{
-					if (item.Cantidad != 1m)
-					{
-						throw new InvalidOperationException("La nota de débito por penalidad siempre debe usar cantidad 1.");
-					}
-
-					continue;
-				}
-
-				var baseItem = ResolverItemBase(referencia, item);
+				var baseItem = string.Equals(item.Ambito, "ITEM", StringComparison.OrdinalIgnoreCase)
+					? ResolverItemBase(referencia, item)
+					: null;
+				if (string.Equals(item.Ambito, "ITEM", StringComparison.OrdinalIgnoreCase) && baseItem is null)
+					throw new InvalidOperationException("El ítem indicado no pertenece al comprobante base.");
 				if (baseItem is not null && item.Cantidad > baseItem.Cantidad)
 				{
 					throw new InvalidOperationException($"La cantidad del ítem '{item.Descripcion}' excede la del comprobante base.");
 				}
 			}
+		}
+
+		private static async Task InsertarMetadataAsync(SqlConnection con, SqlTransaction tx, Guid voucherId, string? solicitudId, DateTime fecha)
+		{
+			if (!Guid.TryParse(solicitudId, out var solicitudGuid)) return;
+			const string sql = """
+			IF OBJECT_ID(N'dbo.NotaDebitoMetadata', N'U') IS NOT NULL
+			BEGIN
+				INSERT INTO dbo.NotaDebitoMetadata (VoucherId, SolicitudId, EmissionTime)
+				VALUES (@VoucherId, @SolicitudId, @EmissionTime);
+			END
+			""";
+			using var cmd = new SqlCommand(sql, con, tx);
+			cmd.Parameters.AddWithValue("@VoucherId", voucherId);
+			cmd.Parameters.AddWithValue("@SolicitudId", solicitudGuid);
+			cmd.Parameters.AddWithValue("@EmissionTime", fecha.TimeOfDay);
+			await cmd.ExecuteNonQueryAsync();
 		}
 
 		private async Task InsertarVoucherAsync(SqlConnection con, SqlTransaction tx, Guid voucherId, NotaComprobanteBaseDisponibleDto referencia, DateTime fechaEmision, string serie, string numero, string moneda, decimal subtotal, decimal igv, decimal total)
@@ -298,7 +323,9 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 			for (var i = 0; i < items.Count; i++)
 			{
 				var item = items[i];
-				var itemBase = ResolverItemBase(referencia, item);
+				var itemBase = string.Equals(item.Ambito, "ITEM", StringComparison.OrdinalIgnoreCase)
+					? ResolverItemBase(referencia, item)
+					: null;
 				using var cmd = new SqlCommand(sql, con, tx);
 				cmd.Parameters.AddWithValue("@Id", Guid.NewGuid());
 				cmd.Parameters.AddWithValue("@VoucherId", voucherId);
@@ -391,6 +418,7 @@ namespace ApiLinaAgbd.Services.Facturacion.NotaDebito
 
 		private sealed class NotaDebitoItemCalculado : INotaItemReferencia
 		{
+			public string Ambito { get; init; } = "COMPROBANTE";
 			public string? VoucherItemReferenciaId { get; init; }
 			public int? ProductoId { get; init; }
 			public string? Codigo { get; init; }

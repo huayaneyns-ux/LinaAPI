@@ -4,6 +4,7 @@ namespace ApiLinaAgbd.Models.Facturacion.NotaDebito
 {
 	public class NotaDebitoEmitirRequestDto
 	{
+		public string? SolicitudId { get; set; }
 		[Required]
 		public string VoucherReferenciaId { get; set; } = string.Empty;
 
@@ -37,6 +38,7 @@ namespace ApiLinaAgbd.Models.Facturacion.NotaDebito
 
 	public class NotaDebitoItemEmitirDto
 	{
+		public string Ambito { get; set; } = "COMPROBANTE";
 		public string? VoucherItemReferenciaId { get; set; }
 		public int? ProductoId { get; set; }
 		public string? Codigo { get; set; }
@@ -45,6 +47,7 @@ namespace ApiLinaAgbd.Models.Facturacion.NotaDebito
 
 		public decimal Cantidad { get; set; }
 		public decimal PrecioUnitario { get; set; }
+		public decimal? MontoAdicionalSinIgv { get; set; }
 		public string UnidadMedida { get; set; } = "NIU";
 	}
 }

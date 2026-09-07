@@ -55,7 +55,9 @@ namespace ApiLinaAgbd.Controllers.Facturacion.ComprobantesVenta
 			try
 			{
 				var comprobante = await _comprobanteVentasService.EmitirAsync(request);
-				return Ok(comprobante);
+				return string.Equals(comprobante.EstadoSunat, "PENDIENTE", StringComparison.OrdinalIgnoreCase)
+					? Accepted(comprobante)
+					: Ok(comprobante);
 			}
 			catch (InvalidOperationException ex)
 			{

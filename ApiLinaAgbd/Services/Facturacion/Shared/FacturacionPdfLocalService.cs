@@ -6,6 +6,7 @@ namespace ApiLinaAgbd.Services.Facturacion.Shared
 {
 	public sealed class FacturacionPdfLocalService
 	{
+		public sealed record PdfStorageMetadata(DateTime IssueDate, string CustomerDocument, string VoucherCode);
 		private readonly IWebHostEnvironment _environment;
 		private readonly IHttpContextAccessor _httpContextAccessor;
 		private readonly FacturacionSunatService _facturacionSunatService;
@@ -33,7 +34,8 @@ namespace ApiLinaAgbd.Services.Facturacion.Shared
 
 		public async Task<(string? A4, string? A5, string? Ticket58, string? Ticket80)> GuardarDesdeUrlsAsync(
 			Guid voucherId,
-			(string? A4, string? A5, string? Ticket58, string? Ticket80) urls)
+			(string? A4, string? A5, string? Ticket58, string? Ticket80) urls,
+			PdfStorageMetadata? metadata = null)
 		{
 			var resultados = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
 
@@ -57,10 +59,10 @@ namespace ApiLinaAgbd.Services.Facturacion.Shared
 				try
 				{
 					var contenido = await _facturacionSunatService.DescargarContenidoAsync(sourceUrl);
-					var rutaArchivo = ObtenerRutaArchivo(voucherId, fileName);
+					var rutaArchivo = ObtenerRutaArchivo(voucherId, fileName, metadata);
 					Directory.CreateDirectory(Path.GetDirectoryName(rutaArchivo)!);
 					await File.WriteAllBytesAsync(rutaArchivo, contenido.Content);
-					resultados[format] = ObtenerUrlPublica(voucherId, fileName);
+					resultados[format] = ObtenerUrlPublica(voucherId, fileName, metadata);
 				}
 				catch (Exception ex)
 				{
@@ -77,6 +79,40 @@ namespace ApiLinaAgbd.Services.Facturacion.Shared
 			);
 		}
 
+		public (string? A4, string? A5, string? Ticket58, string? Ticket80) ObtenerUrlsPublicas(
+			Guid voucherId,
+			(string? A4, string? A5, string? Ticket58, string? Ticket80) urls,
+			PdfStorageMetadata? metadata)
+		{
+			string? Obtener(string? sourceUrl, string fileName) =>
+				string.IsNullOrWhiteSpace(sourceUrl) ? null : ObtenerUrlPublica(voucherId, fileName, metadata);
+
+			return (
+				Obtener(urls.A4, "A4.pdf"),
+				Obtener(urls.A5, "A5.pdf"),
+				Obtener(urls.Ticket58, "58mm.pdf"),
+				Obtener(urls.Ticket80, "80mm.pdf")
+			);
+		}
+
+		public void ProgramarGuardadoDesdeUrls(
+			Guid voucherId,
+			(string? A4, string? A5, string? Ticket58, string? Ticket80) urls,
+			PdfStorageMetadata? metadata)
+		{
+			_ = Task.Run(async () =>
+			{
+				try
+				{
+					await GuardarDesdeUrlsAsync(voucherId, urls, metadata);
+				}
+				catch (Exception ex)
+				{
+					_logger.LogWarning(ex, "Falló la descarga en segundo plano de los PDFs del voucher {VoucherId}.", voucherId);
+				}
+			});
+		}
+
 		public async Task<(byte[] Content, string ContentType, string FileName)> LeerPdfLocalAsync(string? storedUrl, string downloadFileName)
 		{
 			var rutaArchivo = ResolverRutaLocal(storedUrl);
@@ -89,9 +125,9 @@ namespace ApiLinaAgbd.Services.Facturacion.Shared
 			return (content, "application/pdf", downloadFileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) ? downloadFileName : $"{downloadFileName}.pdf");
 		}
 
-		private string ObtenerUrlPublica(Guid voucherId, string fileName)
+		private string ObtenerUrlPublica(Guid voucherId, string fileName, PdfStorageMetadata? metadata)
 		{
-			var relativePath = $"/facturacion/{voucherId:D}/{fileName}";
+			var relativePath = ObtenerRutaRelativa(voucherId, fileName, metadata);
 			var request = _httpContextAccessor.HttpContext?.Request;
 			if (request is null)
 			{
@@ -101,9 +137,38 @@ namespace ApiLinaAgbd.Services.Facturacion.Shared
 			return $"{request.Scheme}://{request.Host}{relativePath}";
 		}
 
-		private string ObtenerRutaArchivo(Guid voucherId, string fileName)
+		private string ObtenerRutaArchivo(Guid voucherId, string fileName, PdfStorageMetadata? metadata)
 		{
-			return Path.Combine(_environment.ContentRootPath, "wwwroot", "facturacion", voucherId.ToString("D"), fileName);
+			return Path.Combine(_environment.ContentRootPath, "wwwroot", ObtenerRutaRelativa(voucherId, fileName, metadata).TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+		}
+
+		private static string ObtenerRutaRelativa(Guid voucherId, string fileName, PdfStorageMetadata? metadata)
+		{
+			if (metadata is null)
+			{
+				return $"/facturacion/{voucherId:D}/{fileName}";
+			}
+
+			var fecha = metadata.IssueDate;
+			var documento = NormalizarSegmento(metadata.CustomerDocument, "SIN_DOCUMENTO");
+			var codigoVoucher = NormalizarSegmento(metadata.VoucherCode, voucherId.ToString("D"));
+			return $"/facturacion/{fecha:yyyy}/{fecha:MM}/{fecha:dd}/{documento}/{codigoVoucher}/{fileName}";
+		}
+
+		private static string NormalizarSegmento(string? valor, string valorPorDefecto)
+		{
+			var limpio = (valor ?? string.Empty).Trim();
+			if (string.IsNullOrWhiteSpace(limpio))
+			{
+				return valorPorDefecto;
+			}
+
+			foreach (var caracter in Path.GetInvalidFileNameChars())
+			{
+				limpio = limpio.Replace(caracter, '_');
+			}
+
+			return limpio.Replace('/', '_').Replace('\\', '_');
 		}
 
 		private string? ResolverRutaLocal(string? storedUrl)

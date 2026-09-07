@@ -17,10 +17,20 @@ namespace ApiLinaAgbd.Repositories.Ventas.Caja
 		public int RegistrarVenta(CajaVentaInsertDto venta)
 		{
 			int idVenta = 0;
+			if (venta.Pagos is null || venta.Pagos.Count != 1)
+				throw new ArgumentException("La venta debe tener un único pago en efectivo.");
 
 			using (SqlConnection con = _conexion.ObtenerConexion())
 			{
 				con.Open();
+				using (var metodoCmd = new SqlCommand(
+					"SELECT TOP 1 nombre FROM dbo.MetodoPago WHERE id = @IdMetodoPago AND estado = 1;", con))
+				{
+					metodoCmd.Parameters.AddWithValue("@IdMetodoPago", venta.Pagos[0].IdMetodoPago);
+					var nombreMetodo = metodoCmd.ExecuteScalar()?.ToString() ?? string.Empty;
+					if (!nombreMetodo.Contains("EFECTIVO", StringComparison.OrdinalIgnoreCase))
+						throw new ArgumentException("Solo se permite el método de pago Efectivo.");
+				}
 
 				SqlTransaction transaction = con.BeginTransaction();
 
@@ -37,7 +47,7 @@ namespace ApiLinaAgbd.Repositories.Ventas.Caja
 
 					cmdVenta.Parameters.AddWithValue(
 						"@IdCliente",
-						venta.IdCliente);
+						(object?)venta.IdCliente ?? DBNull.Value);
 
 					cmdVenta.Parameters.AddWithValue(
 						"@IdUsuario",
@@ -164,84 +174,131 @@ namespace ApiLinaAgbd.Repositories.Ventas.Caja
 
 		public CajaClienteDto? BuscarCliente(string dni)
 		{
-			CajaClienteDto? cliente = null;
-
-			using (SqlConnection con = _conexion.ObtenerConexion())
-			{
-				con.Open();
-
-				SqlCommand cmd = new SqlCommand(
-					"USP_USU_SEL_USUARIO_DNI",
-					con
-				);
-
-				cmd.CommandType = CommandType.StoredProcedure;
-
-				cmd.Parameters.AddWithValue(
-					"@Dni",
-					dni
-				);
-
-				SqlDataReader dr = cmd.ExecuteReader();
-
-				if (dr.Read())
-				{
-					cliente = new CajaClienteDto
-					{
-						Id = Convert.ToInt32(dr["id"]),
-						NombreApellido = dr["nombre_apellido"].ToString(),
-						DNI = dr["dni"].ToString(),
-						Telefono = dr["telefono"].ToString(),
-						Correo = dr["correo"].ToString()
-					};
-				}
-			}
-
-			return cliente;
+			return BuscarClientePorDocumento("DNI", dni);
 		}
 
-		public int CrearCliente(CajaClienteInsertDto cliente)
+		public CajaClienteDto? BuscarClientePorDocumento(string tipoDocumento, string numero)
 		{
-			int idUsuario = 0;
-
-			using (SqlConnection con = _conexion.ObtenerConexion())
+			using var con = _conexion.ObtenerConexion();
+			con.Open();
+			const string sql = @"
+				SELECT TOP 1 u.id, d.tipo_documento, d.numero, d.nombre,
+				       u.telefono, u.correo, COALESCE(dir.nombre_direccion, '') AS direccion
+				FROM dbo.usuario u
+				INNER JOIN dbo.documento d ON d.id = u.id_documento
+				OUTER APPLY (
+					SELECT TOP 1 dr.nombre_direccion
+					FROM dbo.UsuarioDireccion ud
+					INNER JOIN dbo.direccion dr ON dr.id = ud.id_direccion
+					WHERE ud.id_usuario = u.id AND ud.estado = 1
+					ORDER BY ud.es_principal DESC, ud.id DESC
+				) dir
+				WHERE d.tipo_documento = @TipoDocumento AND d.numero = @Numero;";
+			using var cmd = new SqlCommand(sql, con);
+			cmd.Parameters.AddWithValue("@TipoDocumento", tipoDocumento);
+			cmd.Parameters.AddWithValue("@Numero", numero);
+			using var dr = cmd.ExecuteReader();
+			if (!dr.Read()) return null;
+			return new CajaClienteDto
 			{
-				con.Open();
+				Id = Convert.ToInt32(dr["id"]),
+				TipoDocumento = dr["tipo_documento"]?.ToString() ?? tipoDocumento,
+				Documento = dr["numero"]?.ToString() ?? numero,
+				DNI = tipoDocumento == "DNI" ? dr["numero"]?.ToString() ?? numero : string.Empty,
+				NombreApellido = dr["nombre"]?.ToString() ?? string.Empty,
+				Telefono = dr["telefono"]?.ToString() ?? string.Empty,
+				Correo = dr["correo"]?.ToString() ?? string.Empty,
+				Direccion = dr["direccion"]?.ToString() ?? string.Empty
+			};
+		}
 
-				SqlCommand cmd = new SqlCommand(
-					"USP_USU_INS_CLIENTE",
-					con
-				);
+		public int CrearOReutilizarCliente(CajaClienteInsertDto cliente)
+		{
+			using var con = _conexion.ObtenerConexion();
+			con.Open();
+			using var tx = con.BeginTransaction();
+			try
+			{
+				const string sql = @"
+				DECLARE @DocumentoId INT;
+				DECLARE @UsuarioId INT;
+				SELECT @DocumentoId = id
+				FROM dbo.documento WITH (UPDLOCK, HOLDLOCK)
+				WHERE tipo_documento = @TipoDocumento AND numero = @Numero;
+				IF @DocumentoId IS NULL
+				BEGIN
+					INSERT INTO dbo.documento(tipo_documento, numero, nombre)
+					VALUES (@TipoDocumento, @Numero, @NombreApellido);
+					SET @DocumentoId = CONVERT(INT, SCOPE_IDENTITY());
+				END;
 
-				cmd.CommandType =
-					CommandType.StoredProcedure;
+				SELECT TOP 1 @UsuarioId = id
+				FROM dbo.usuario WITH (UPDLOCK, HOLDLOCK)
+				WHERE id_documento = @DocumentoId;
 
-				cmd.Parameters.AddWithValue(
-					"@NombreApellido",
-					cliente.NombreApellido
-				);
+				IF @UsuarioId IS NULL
+				BEGIN
+					INSERT INTO dbo.usuario(
+						nombre_apellido, telefono, correo, contrasena,
+						estado, id_rol, id_documento)
+					VALUES (
+						@NombreApellido, NULLIF(@Telefono, ''), NULLIF(@Correo, ''), NULL,
+						1, 1, @DocumentoId);
+					SET @UsuarioId = CONVERT(INT, SCOPE_IDENTITY());
+				END;
 
-				cmd.Parameters.AddWithValue(
-					"@Dni",
-					cliente.DNI
-				);
+				IF NULLIF(@Direccion, '') IS NOT NULL AND NULLIF(@Ubigeo, '') IS NOT NULL
+				BEGIN
+					DECLARE @DireccionId INT;
+					SET @DireccionId = NULL;
+					IF EXISTS (
+						SELECT 1
+						FROM dbo.distrito d
+						WHERE d.codigo_ubigeo = @Ubigeo
+						  AND NOT EXISTS (
+							  SELECT 1
+							  FROM dbo.UsuarioDireccion ud
+							  INNER JOIN dbo.direccion dr ON dr.id = ud.id_direccion
+							  WHERE ud.id_usuario = @UsuarioId
+							    AND ud.estado = 1
+							    AND dr.nombre_direccion = @Direccion
+						  )
+					)
+					BEGIN
+						INSERT INTO dbo.direccion(nombre_direccion, referencia, id_distrito)
+						SELECT @Direccion, NULL, d.id
+						FROM dbo.distrito d
+						WHERE d.codigo_ubigeo = @Ubigeo;
+						SET @DireccionId = CONVERT(INT, SCOPE_IDENTITY());
+					END;
+					IF @DireccionId IS NOT NULL
+					BEGIN
+						INSERT INTO dbo.UsuarioDireccion(id_usuario, id_direccion, es_principal, estado)
+						VALUES (@UsuarioId, @DireccionId,
+							CASE WHEN NOT EXISTS (SELECT 1 FROM dbo.UsuarioDireccion WHERE id_usuario = @UsuarioId AND estado = 1) THEN 1 ELSE 0 END,
+							1, SYSUTCDATETIME());
+					END;
+				END;
 
-				cmd.Parameters.AddWithValue(
-					"@Telefono",
-					cliente.Telefono ?? ""
-				);
-
-				cmd.Parameters.AddWithValue(
-					"@Correo",
-					cliente.Correo ?? ""
-				);
-
-				idUsuario = Convert.ToInt32(
-					cmd.ExecuteScalar()
-				);
+				SELECT @UsuarioId;";
+				using var cmd = new SqlCommand(sql, con, tx);
+				var numero = string.IsNullOrWhiteSpace(cliente.Documento) ? cliente.DNI : cliente.Documento;
+				cmd.Parameters.AddWithValue("@TipoDocumento", cliente.TipoDocumento.ToUpperInvariant());
+				cmd.Parameters.AddWithValue("@Numero", numero);
+				cmd.Parameters.AddWithValue("@NombreApellido", cliente.NombreApellido);
+				cmd.Parameters.AddWithValue("@Telefono", cliente.Telefono ?? "");
+				cmd.Parameters.AddWithValue("@Correo", cliente.Correo ?? "");
+				cmd.Parameters.AddWithValue("@Direccion", cliente.Direccion ?? "");
+				cmd.Parameters.AddWithValue("@Ubigeo", cliente.Ubigeo ?? "");
+				var id = Convert.ToInt32(cmd.ExecuteScalar());
+				tx.Commit();
+				return id;
 			}
-
-			return idUsuario;
+			catch
+			{
+				tx.Rollback();
+				throw;
+			}
 		}
 
 		public void RegistrarPago(int id, CajaPagoInsertDto pago)

@@ -6,15 +6,18 @@ using ApiLinaAgbd.Models.Facturacion.ComprobantesVenta;
 using ApiLinaAgbd.Models.Facturacion.Ubl;
 using ApiLinaAgbd.Repositories.Facturacion.ComprobantesVenta;
 using ApiLinaAgbd.Services.Facturacion.Shared;
+using ApiLinaAgbd.Services.Persona;
 
 namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 {
 	public class ComprobanteVentasService : IComprobanteVentasService
 	{
+		private const decimal TasaIgvVigente = 18m;
 		private const string SerieBoleta = "B001";
 		private const string SerieFactura = "F001";
 		private const string TipoBoletaSunat = "03";
 		private const string TipoFacturaSunat = "01";
+		private const string DireccionSunatPorDefecto = "SIN DIRECCION";
 
 		private readonly IComprobanteVentasRepository _repository;
 		private readonly BoletaUblBuilder _boletaBuilder;
@@ -22,6 +25,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 		private readonly FacturacionSunatService _facturacionSunatService;
 		private readonly FacturacionPdfLocalService _pdfLocalService;
 		private readonly FacturacionSettings _settings;
+		private readonly IApiPeruService _apiPeruService;
 
 		public ComprobanteVentasService(
 			IComprobanteVentasRepository repository,
@@ -29,6 +33,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 			FacturaUblBuilder facturaBuilder,
 			FacturacionSunatService facturacionSunatService,
 			FacturacionPdfLocalService pdfLocalService,
+			IApiPeruService apiPeruService,
 			Microsoft.Extensions.Options.IOptions<FacturacionSettings> options)
 		{
 			_repository = repository;
@@ -36,6 +41,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 			_facturaBuilder = facturaBuilder;
 			_facturacionSunatService = facturacionSunatService;
 			_pdfLocalService = pdfLocalService;
+			_apiPeruService = apiPeruService;
 			_settings = options.Value;
 		}
 
@@ -52,13 +58,9 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 					v.fecha,
 					v.igv,
 					u.nombre_apellido AS ClienteNombre,
-					COALESCE(NULLIF(d.tipo_documento, ''), CASE
-						WHEN NULLIF(u.ruc, '') IS NOT NULL THEN 'ruc'
-						WHEN NULLIF(u.dni, '') IS NOT NULL THEN 'dni'
-						ELSE ''
-					END) AS TipoDocumentoCliente,
-					COALESCE(NULLIF(d.numero, ''), NULLIF(u.ruc, ''), NULLIF(u.dni, ''), '') AS DocumentoCliente,
-					COALESCE(NULLIF(d.nombre, ''), NULLIF(u.nombre_apellido, ''), '') AS NombreDocumentoCliente,
+					COALESCE(NULLIF(d.tipo_documento, ''), '') AS TipoDocumentoCliente,
+					COALESCE(NULLIF(d.numero, ''), '') AS DocumentoCliente,
+					COALESCE(NULLIF(d.nombre, ''), '') AS NombreDocumentoCliente,
 					COALESCE(NULLIF(dir.nombre_direccion, ''), '') AS DireccionCliente,
 					COALESCE(NULLIF(u.correo, ''), '') AS CorreoCliente,
 					p.id AS ProductoId,
@@ -68,7 +70,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 					CAST(dv.preciounitario AS decimal(18, 2)) AS PrecioUnitario,
 					COALESCE(NULLIF(um.abreviatura, ''), 'NIU') AS UnidadMedida
 				FROM dbo.venta v
-				INNER JOIN dbo.usuario u ON u.id = v.id_cliente
+				LEFT JOIN dbo.usuario u ON u.id = v.id_cliente
 				LEFT JOIN dbo.documento d ON d.id = u.id_documento
 				OUTER APPLY (
 					SELECT TOP 1 dir.nombre_direccion
@@ -76,7 +78,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 					INNER JOIN dbo.direccion dir ON dir.id = ud.id_direccion
 					WHERE ud.id_usuario = u.id
 					  AND ud.estado = 1
-					ORDER BY ud.es_principal DESC, ud.fecha_registro DESC, ud.id DESC
+						ORDER BY ud.es_principal DESC, ud.id DESC
 				) dir
 				INNER JOIN dbo.detalleventa dv ON dv.id_venta = v.id
 				INNER JOIN dbo.producto p ON p.id = dv.id_producto
@@ -109,6 +111,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 						Id = ventaId.ToString(),
 						Codigo = $"VTA-{ventaId:D6}",
 						Fecha = fecha.ToString("yyyy-MM-dd"),
+						FechaEmisionServidor = DateTime.Now.ToString("yyyy-MM-dd"),
 						Cliente = new ComprobanteVentaClienteDto
 						{
 							TipoDocumento = string.IsNullOrWhiteSpace(tipoDocumento) ? "DNI" : tipoDocumento,
@@ -123,10 +126,12 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 				}
 
 				var cantidad = Convert.ToDecimal(dr["Cantidad"]);
-				var precio = Convert.ToDecimal(dr["PrecioUnitario"]);
+				var precioFinal = Convert.ToDecimal(dr["PrecioUnitario"]);
 				var porcentajeIgv = ObtenerIgvVenta(dr);
-				var subtotal = Redondear(cantidad * precio);
-				var igvItem = Redondear(subtotal * porcentajeIgv / 100m);
+				var importe = Redondear(cantidad * precioFinal);
+				var subtotal = FacturacionVoucherHelper.CalcularBaseDesdePrecioFinal(importe, porcentajeIgv);
+				var igvItem = Redondear(importe - subtotal);
+				var precioBase = cantidad <= 0 ? 0m : subtotal / cantidad;
 
 				venta.Detalle.Add(new VentaComprobanteDetalleDto
 				{
@@ -134,16 +139,16 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 					Codigo = dr["CodigoProducto"]?.ToString() ?? string.Empty,
 					ProductoServicio = dr["DescripcionProducto"]?.ToString() ?? string.Empty,
 					Cantidad = cantidad,
-					Precio = precio,
+					Precio = precioBase,
 					Igv = igvItem,
-					Importe = Redondear(subtotal + igvItem),
+					Importe = importe,
 					UnidadMedida = dr["UnidadMedida"]?.ToString() ?? "NIU"
 				});
 			}
 
 			foreach (var venta in ventas.Values)
 			{
-				venta.Subtotal = Redondear(venta.Detalle.Sum(x => x.Precio * x.Cantidad));
+				venta.Subtotal = Redondear(venta.Detalle.Sum(x => x.Importe - x.Igv));
 				venta.Igv = Redondear(venta.Detalle.Sum(x => x.Igv));
 				venta.Total = Redondear(venta.Subtotal + venta.Igv);
 			}
@@ -484,14 +489,25 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 			}
 
 			var venta = await ObtenerVentaAsync(request.VentaOrigenId);
-			var clienteFiscal = ResolverClienteFiscal(venta, tipo, request.ReceptorSource, request.Cliente);
+			var clienteFiscal = await ResolverClienteFiscalAsync(venta, tipo, request.ReceptorSource, request.Cliente);
 
-			var fechaEmision = ParsearFechaObligatoria(request.FechaEmision, "La fecha de emisión es obligatoria.");
-			var fechaVencimiento = string.IsNullOrWhiteSpace(request.FechaVencimiento)
-				? (DateTime?)null
-				: ParsearFechaObligatoria(request.FechaVencimiento, "La fecha de vencimiento no es válida.");
+			// La fecha fiscal es la fecha del servidor. Nunca se acepta la fecha enviada por el cliente.
+			var fechaEmision = DateTime.Now.Date;
+			var fechaVencimiento = (DateTime?)null;
 			var moneda = (request.Moneda ?? "PEN").Trim().ToUpperInvariant();
-			var pagoNormalizado = NormalizarPago(request.Pago);
+			var pagoNormalizado = new ComprobanteVentaPagoDto
+			{
+				FormaPago = "CONTADO",
+				Cuotas = new List<ComprobanteVentaCuotaDto>()
+			};
+
+			if (request.Pago is not null &&
+				(!string.IsNullOrWhiteSpace(request.Pago.FormaPago) &&
+				 !string.Equals(request.Pago.FormaPago, "CONTADO", StringComparison.OrdinalIgnoreCase) ||
+				 (request.Pago.Cuotas?.Count ?? 0) > 0))
+			{
+				throw new InvalidOperationException("Boletas y facturas solo se emiten al contado; no se permiten crédito ni cuotas.");
+			}
 
 			ValidarSolicitud(tipo, venta, clienteFiscal, fechaEmision, fechaVencimiento, moneda, pagoNormalizado, request.ReceptorSource);
 
@@ -507,7 +523,12 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 				using var tx = con.BeginTransaction();
 
 				await ValidarVentaSinComprobanteAsync(con, tx, request.VentaOrigenId);
-				numero = await GenerarNumeroAleatorioDisponibleAsync(con, tx, tipoComprobanteSunat, serie);
+				numero = await FacturacionVoucherHelper.GenerarNumeroAleatorioDisponibleAsync(
+					con,
+					tx,
+					tipoComprobanteSunat,
+					serie,
+					_settings.Emisor.Ruc);
 
 				await InsertarVoucherPendienteAsync(con, tx, voucherId, request.VentaOrigenId, tipoComprobanteSunat, serie, numero, fechaEmision, fechaVencimiento, moneda, venta, pagoNormalizado);
 				if (DebePersistirClienteSnapshot(tipo, request.ReceptorSource, clienteFiscal))
@@ -532,17 +553,19 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 			if (!FacturacionVoucherHelper.FueRecibidoPorApi(envio))
 			{
 				using var conFallo = _repository.CreateConnection();
-				await conFallo.OpenAsync();
-				await FacturacionVoucherHelper.ActualizarVoucherPostFalloComunicacionAsync(conFallo, voucherId);
-				await RegistrarTransmisionAsync(conFallo, voucherId.ToString(), "SEND", envio, solicitudUtc);
-				throw new InvalidOperationException(envio.DetalleError ?? envio.MensajeSunat ?? envio.Mensaje);
+					await conFallo.OpenAsync();
+					await FacturacionVoucherHelper.ActualizarVoucherPostFalloComunicacionAsync(conFallo, voucherId);
+					await MarcarVoucherPendienteAsync(conFallo, voucherId);
+					await RegistrarTransmisionAsync(conFallo, voucherId.ToString(), "SEND", envio, solicitudUtc);
+				return await ObtenerComprobantePorIdAsync(voucherId.ToString());
 			}
 
 			using (var con = _repository.CreateConnection())
 			{
 				await con.OpenAsync();
-				await ActualizarVoucherPostEnvioAsync(con, voucherId, envio);
-				await RegistrarTransmisionAsync(con, voucherId.ToString(), "SEND", envio, solicitudUtc);
+				var estadoPostEnvio = await FacturacionVoucherHelper.ConsultarEstadoLuegoDeEnviarAsync(_facturacionSunatService, envio);
+				await ActualizarVoucherPostEnvioAsync(con, voucherId, estadoPostEnvio.ResultadoFinal, fechaEmision, clienteFiscal.Documento, fileName);
+				await RegistrarTransmisionAsync(con, voucherId.ToString(), "SEND", estadoPostEnvio.ResultadoFinal, solicitudUtc);
 			}
 
 			return await ObtenerComprobantePorIdAsync(voucherId.ToString());
@@ -565,11 +588,6 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 			return venta;
 		}
 
-		private static string GenerarNumeroAleatorio()
-		{
-			return Random.Shared.Next(0, 100_000_000).ToString("D8");
-		}
-
 		private static async Task ValidarVentaSinComprobanteAsync(SqlConnection con, SqlTransaction tx, int ventaId)
 		{
 			const string sql = """
@@ -577,7 +595,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 					Series,
 					Number,
 					SunatTypeCode
-				FROM dbo.Voucher
+				FROM dbo.Voucher WITH (UPDLOCK, HOLDLOCK)
 				WHERE VentaId = @VentaId
 				  AND SunatTypeCode IN ('01', '03')
 				  AND ISNULL(SunatStatus, 'NO_ENVIADO') IN ('NO_ENVIADO', 'PENDIENTE', 'ACEPTADO');
@@ -600,36 +618,6 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 
 				throw new InvalidOperationException($"La venta ya tiene un {tipo} emitido: {serie}-{number}.");
 			}
-		}
-
-		private async Task<string> GenerarNumeroAleatorioDisponibleAsync(SqlConnection con, SqlTransaction tx, string tipoComprobanteSunat, string serie)
-		{
-			const string sql = """
-				SELECT COUNT(1)
-				FROM dbo.Voucher
-				WHERE SunatTypeCode = @tipo
-				  AND Series = @serie
-				  AND IssuerRuc = @issuerRuc
-				  AND Number = @number;
-				""";
-
-			for (var intento = 0; intento < 100; intento++)
-			{
-				var numero = GenerarNumeroAleatorio();
-				using var cmd = new SqlCommand(sql, con, tx);
-				cmd.Parameters.AddWithValue("@tipo", tipoComprobanteSunat);
-				cmd.Parameters.AddWithValue("@serie", serie);
-				cmd.Parameters.AddWithValue("@issuerRuc", _settings.Emisor.Ruc);
-				cmd.Parameters.AddWithValue("@number", numero);
-
-				var existe = Convert.ToInt32(await cmd.ExecuteScalarAsync()) > 0;
-				if (!existe)
-				{
-					return numero;
-				}
-			}
-
-			throw new InvalidOperationException("No se pudo generar un número aleatorio único para el comprobante.");
 		}
 
 		private async Task InsertarVoucherPendienteAsync(
@@ -792,7 +780,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 				cmd.Parameters.AddWithValue("@Quantity", item.Cantidad);
 				cmd.Parameters.AddWithValue("@UnitCode", string.IsNullOrWhiteSpace(item.UnidadMedida) ? "NIU" : item.UnidadMedida);
 				cmd.Parameters.AddWithValue("@UnitPrice", item.Precio);
-				cmd.Parameters.AddWithValue("@SaleValue", Redondear(item.Cantidad * item.Precio));
+				cmd.Parameters.AddWithValue("@SaleValue", Redondear(item.Importe - item.Igv));
 				cmd.Parameters.AddWithValue("@IgvPercentage", ObtenerPorcentajeIgv(item));
 				cmd.Parameters.AddWithValue("@Igv", item.Igv);
 				cmd.Parameters.AddWithValue("@Total", item.Importe);
@@ -875,7 +863,13 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 			}
 		}
 
-		private async Task ActualizarVoucherPostEnvioAsync(SqlConnection con, Guid voucherId, FacturacionEnvioResultado envio)
+		private async Task ActualizarVoucherPostEnvioAsync(
+			SqlConnection con,
+			Guid voucherId,
+			FacturacionEnvioResultado envio,
+			DateTime fechaEmision,
+			string? documentoCliente,
+			string fileName)
 		{
 			const string sql = """
 				UPDATE dbo.Voucher
@@ -896,7 +890,12 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 				""";
 
 			var urlsPdf = ExtraerUrlsPdf(envio.RespuestaApi);
-			var urlsPdfLocales = await _pdfLocalService.GuardarDesdeUrlsAsync(voucherId, urlsPdf);
+			var metadata = new FacturacionPdfLocalService.PdfStorageMetadata(
+				fechaEmision,
+				documentoCliente ?? "SIN_DOCUMENTO",
+				fileName);
+			var urlsPdfLocales = _pdfLocalService.ObtenerUrlsPublicas(voucherId, urlsPdf, metadata);
+			_pdfLocalService.ProgramarGuardadoDesdeUrls(voucherId, urlsPdf, metadata);
 			var sunatStatus = NormalizarSunatStatusParaVoucher(envio);
 			using var cmd = new SqlCommand(sql, con);
 			cmd.Parameters.AddWithValue("@Id", voucherId);
@@ -908,6 +907,14 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 			cmd.Parameters.AddWithValue("@PdfA5Url", (object?)urlsPdfLocales.A5 ?? DBNull.Value);
 			cmd.Parameters.AddWithValue("@Pdf58mmUrl", (object?)urlsPdfLocales.Ticket58 ?? DBNull.Value);
 			cmd.Parameters.AddWithValue("@Pdf80mmUrl", (object?)urlsPdfLocales.Ticket80 ?? DBNull.Value);
+			await cmd.ExecuteNonQueryAsync();
+		}
+
+		private static async Task MarcarVoucherPendienteAsync(SqlConnection con, Guid voucherId)
+		{
+			const string sql = "UPDATE dbo.Voucher SET SunatStatus = 'PENDIENTE', UpdatedAt = SYSUTCDATETIME() WHERE Id = @Id;";
+			using var cmd = new SqlCommand(sql, con);
+			cmd.Parameters.AddWithValue("@Id", voucherId);
 			await cmd.ExecuteNonQueryAsync();
 		}
 
@@ -960,48 +967,65 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 			DateTime createdAtUtc)
 			=> await FacturacionVoucherHelper.RegistrarTransmisionAsync(con, Guid.Parse(voucherId), operationType, resultado, createdAtUtc);
 
-		private static ComprobanteVentaClienteDto ResolverClienteFiscal(
+		private async Task<ComprobanteVentaClienteDto> ResolverClienteFiscalAsync(
 			VentaComprobanteDisponibleDto venta,
 			string tipo,
 			string? receptorSource,
 			ComprobanteVentaClienteDto? clienteRequest)
 		{
 			var source = (receptorSource ?? "SALE_CUSTOMER").Trim().ToUpperInvariant();
-			var clienteCustomInformado = TieneDatosCliente(clienteRequest);
+			var documento = clienteRequest?.Documento?.Trim();
+			var tipoDocumento = clienteRequest?.TipoDocumento?.Trim().ToUpperInvariant();
 
-			if (source == "SALE_CUSTOMER" && clienteCustomInformado)
+			if (string.IsNullOrWhiteSpace(documento) && source == "SALE_CUSTOMER")
 			{
-				source = "CUSTOM";
+				documento = venta.Cliente.Documento?.Trim();
+				tipoDocumento = venta.Cliente.TipoDocumento?.Trim().ToUpperInvariant();
 			}
 
-			if (source == "SALE_CUSTOMER")
+			if (string.IsNullOrWhiteSpace(documento))
 			{
-				return ClonarCliente(venta.Cliente);
-			}
-
-			if (source == "CUSTOM")
-			{
-				if (clienteRequest is null)
+				if (tipo == "BOLETA" && venta.Total <= 700m)
 				{
-					throw new InvalidOperationException("Debe enviar los datos del receptor cuando el origen es CUSTOM.");
+					return new ComprobanteVentaClienteDto
+					{
+						// APISUNAT representa una boleta sin documento con DNI genérico.
+						TipoDocumento = "DNI",
+						Documento = "00000000",
+						Nombre = "---",
+						Direccion = string.Empty,
+						Correo = string.Empty
+					};
 				}
 
-				return new ComprobanteVentaClienteDto
-				{
-					TipoDocumento = (clienteRequest.TipoDocumento ?? string.Empty).Trim().ToUpperInvariant(),
-					Documento = (clienteRequest.Documento ?? string.Empty).Trim(),
-					Nombre = (clienteRequest.Nombre ?? string.Empty).Trim(),
-					Direccion = (clienteRequest.Direccion ?? string.Empty).Trim(),
-					Correo = (clienteRequest.Correo ?? string.Empty).Trim()
-				};
+				throw new InvalidOperationException("Debe ingresar DNI o RUC para consultar al cliente.");
 			}
 
-			if (tipo == "BOLETA" && source == "UNIDENTIFIED")
+			if (tipo == "FACTURA")
 			{
-				return new ComprobanteVentaClienteDto();
+				tipoDocumento = "RUC";
+			}
+			else if (tipoDocumento is not ("DNI" or "RUC"))
+			{
+				throw new InvalidOperationException("Para boleta solo se permite DNI o RUC.");
 			}
 
-			throw new InvalidOperationException("El origen del receptor no es válido.");
+			var resultado = await _apiPeruService.ConsultarYRegistrarPersonaAsync(tipoDocumento!, documento);
+			if (!resultado.Success || string.IsNullOrWhiteSpace(resultado.Nombre))
+			{
+				throw new InvalidOperationException(resultado.Mensaje ?? "No se pudo validar el DNI/RUC en ApiPeru.");
+			}
+
+			return new ComprobanteVentaClienteDto
+			{
+				TipoDocumento = tipoDocumento!,
+				Documento = resultado.Numero?.Trim() ?? documento,
+				Nombre = resultado.Nombre.Trim(),
+				Direccion = string.IsNullOrWhiteSpace(resultado.Direccion)
+					? DireccionSunatPorDefecto
+					: resultado.Direccion.Trim(),
+				Correo = string.Empty
+			};
 		}
 
 		private static bool TieneDatosCliente(ComprobanteVentaClienteDto? cliente) =>
@@ -1079,22 +1103,24 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 
 		private static void ValidarBoleta(ComprobanteVentaClienteDto cliente, string? receptorSource)
 		{
-			if (string.Equals((receptorSource ?? string.Empty).Trim(), "UNIDENTIFIED", StringComparison.OrdinalIgnoreCase))
-			{
-				return;
-			}
-
 			var documento = (cliente.Documento ?? string.Empty).Trim();
 			var tipoDocumento = (cliente.TipoDocumento ?? string.Empty).Trim().ToUpperInvariant();
 
-			if (string.IsNullOrWhiteSpace(documento))
+			if (tipoDocumento == "DNI" && documento == "00000000")
 			{
+				if (cliente.Nombre != "---")
+					throw new InvalidOperationException("El receptor genérico de la boleta no es válido.");
 				return;
 			}
 
-			if (tipoDocumento is not ("DNI" or "RUC" or "CE"))
+			if (string.IsNullOrWhiteSpace(documento))
 			{
-				throw new InvalidOperationException("En boleta solo se permite DNI, RUC o CE.");
+				throw new InvalidOperationException("La boleta requiere DNI o RUC del cliente.");
+			}
+
+			if (tipoDocumento is not ("DNI" or "RUC"))
+			{
+				throw new InvalidOperationException("En boleta solo se permite DNI o RUC.");
 			}
 
 			if (!DocumentoValido(tipoDocumento, documento))
@@ -1104,7 +1130,7 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 
 			if (string.IsNullOrWhiteSpace(cliente.Nombre) || string.IsNullOrWhiteSpace(cliente.Direccion))
 			{
-				throw new InvalidOperationException("Si la boleta tiene documento, el nombre y la dirección son obligatorios.");
+				throw new InvalidOperationException("El nombre y la dirección deben provenir de ApiPeru.");
 			}
 		}
 
@@ -1135,51 +1161,9 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 				throw new InvalidOperationException("La fecha de vencimiento debe ser mayor a la fecha de emisión.");
 			}
 
-			if (pago is null || string.IsNullOrWhiteSpace(pago.FormaPago))
+			if (pago is null || !string.Equals(pago.FormaPago, "CONTADO", StringComparison.OrdinalIgnoreCase) || (pago.Cuotas?.Count ?? 0) > 0 || fechaVencimiento.HasValue)
 			{
-				throw new InvalidOperationException("La factura requiere forma de pago.");
-			}
-
-			if (pago.FormaPago is not ("CONTADO" or "CREDITO"))
-			{
-				throw new InvalidOperationException("La forma de pago permitida es CONTADO o CREDITO.");
-			}
-
-			if (pago.FormaPago == "CONTADO")
-			{
-				if (pago.Cuotas.Count > 0)
-				{
-					throw new InvalidOperationException("La factura al contado no debe registrar cuotas.");
-				}
-
-				return;
-			}
-
-			if (pago.Cuotas.Count == 0)
-			{
-				throw new InvalidOperationException("La factura a crédito debe registrar al menos una cuota.");
-			}
-
-			var sumaCuotas = 0m;
-			foreach (var cuota in pago.Cuotas)
-			{
-				if (cuota.Monto <= 0 || cuota.Monto > total)
-				{
-					throw new InvalidOperationException("Cada cuota debe ser mayor a 0.01 y no superar el total del comprobante.");
-				}
-
-				var fechaCuota = ParsearFechaObligatoria(cuota.FechaVencimiento, "La fecha de vencimiento de la cuota no es válida.");
-				if (fechaCuota.Date <= DateTime.Today)
-				{
-					throw new InvalidOperationException("Cada cuota debe vencer después del día actual.");
-				}
-
-				sumaCuotas += cuota.Monto;
-			}
-
-			if (Redondear(sumaCuotas) != Redondear(total))
-			{
-				throw new InvalidOperationException("La suma de cuotas debe coincidir exactamente con el importe total de la factura.");
+				throw new InvalidOperationException("La factura solo permite pago CONTADO, sin cuotas ni fecha de vencimiento.");
 			}
 		}
 
@@ -1217,12 +1201,12 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 				{
 					Descripcion = x.ProductoServicio,
 					Cantidad = x.Cantidad,
-					PrecioUnitario = x.Precio,
-					ValorVenta = Redondear(x.Precio * x.Cantidad),
+					PrecioUnitario = Redondear(x.Precio),
+					ValorVenta = Redondear(x.Importe - x.Igv),
 					Igv = x.Igv,
 					PrecioConIgv = Redondear(x.Importe / (x.Cantidad <= 0 ? 1 : x.Cantidad)),
 					UnidadMedida = x.UnidadMedida,
-					PorcentajeIgv = 18,
+					PorcentajeIgv = ObtenerPorcentajeIgv(x),
 					CodigoAfectacionIgv = "10"
 				}).ToList()
 			};
@@ -1265,12 +1249,12 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 				{
 					Descripcion = x.ProductoServicio,
 					Cantidad = x.Cantidad,
-					PrecioUnitario = x.Precio,
-					ValorVenta = Redondear(x.Precio * x.Cantidad),
+					PrecioUnitario = Redondear(x.Precio),
+					ValorVenta = Redondear(x.Importe - x.Igv),
 					Igv = x.Igv,
 					PrecioConIgv = Redondear(x.Importe / (x.Cantidad <= 0 ? 1 : x.Cantidad)),
 					UnidadMedida = x.UnidadMedida,
-					PorcentajeIgv = 18,
+					PorcentajeIgv = ObtenerPorcentajeIgv(x),
 					CodigoAfectacionIgv = "10"
 				}).ToList(),
 				Pago = pago is null
@@ -1298,25 +1282,14 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 
 		private static decimal ObtenerIgvVenta(SqlDataReader dr)
 		{
-			var igv = dr["igv"];
-			if (igv == DBNull.Value)
-			{
-				return 18m;
-			}
-
-			var porcentaje = Convert.ToDecimal(igv);
-			return porcentaje <= 0 ? 18m : porcentaje;
+			// Venta.igv representa la tasa, no el importe monetario.
+			// Caja y SUNAT trabajan actualmente con la tasa vigente del 18 %.
+			return TasaIgvVigente;
 		}
 
 		private static decimal ObtenerPorcentajeIgv(VentaComprobanteDetalleDto item)
 		{
-			var baseAmount = Redondear(item.Cantidad * item.Precio);
-			if (baseAmount <= 0)
-			{
-				return 18m;
-			}
-
-			return Redondear((item.Igv / baseAmount) * 100m);
+			return TasaIgvVigente;
 		}
 
 		private static string MapearTipoDocumentoSunat(string tipoDocumento, bool esFactura)
