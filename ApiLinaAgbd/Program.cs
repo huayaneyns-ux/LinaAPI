@@ -48,6 +48,8 @@ using ApiLinaAgbd.Services.Ventas.Caja;
 using ApiLinaAgbd.Services.Ventas.Lugares;
 using ApiLinaAgbd.Services.Ventas.PedidosRecibidos;
 using ApiLinaAgbd.Services.Ventas.VentaRealizada;
+using ApiLinaAgbd.Repositories.Scraping;
+using ApiLinaAgbd.Services.Scraping;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
 
@@ -133,6 +135,10 @@ builder.Services.AddScoped<IUnidadMedidaRepository, UnidadMedidaRepository>();
 builder.Services.AddScoped<IUnidadMedidaService, UnidadMedidaService>();
 builder.Services.AddScoped<ILoteRepository, LoteRepository>();
 builder.Services.AddScoped<ILoteService, LoteService>();
+
+// Scraping y matching de productos
+builder.Services.AddScoped<IScrapingRepository, ScrapingRepository>();
+builder.Services.AddScoped<IScrapingService, ScrapingService>();
 
 // Compras
 builder.Services.AddScoped<ICompraRepository, CompraRepository>();
