@@ -7,6 +7,7 @@ public class ScrapingMatchDto
     public string? InternalProductName { get; set; }
     public string? InternalProductSku { get; set; }
     public decimal? InternalProductPrice { get; set; }
+    public decimal? InternalProductCost { get; set; }
     public long ScrapedProductId { get; set; }
     public string Store { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;

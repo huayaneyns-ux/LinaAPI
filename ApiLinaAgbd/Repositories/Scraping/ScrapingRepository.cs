@@ -14,7 +14,8 @@ public class ScrapingRepository : IScrapingRepository
     {
         const string sql = """
             SELECT pm.Id, pm.ProductoId, p.nombre AS InternalProductName, p.sku AS InternalProductSku,
-                   p.precio_venta AS InternalProductPrice, pm.ScrapedProductId, s.Name AS Store,
+                   p.precio_venta AS InternalProductPrice, COALESCE(latestCost.Cost, latestLot.Cost) AS InternalProductCost,
+                   pm.ScrapedProductId, s.Name AS Store,
                    sp.OriginalName AS Name, COALESCE(latest.CurrentPrice, 0) AS Price, sp.Url, pm.Score,
                    pm.Decision, sp.ScrapedAt
             FROM dbo.ProductMatch pm
@@ -27,6 +28,20 @@ public class ScrapingRepository : IScrapingRepository
                 WHERE pph.ScrapedProductId = sp.Id
                 ORDER BY pph.CapturedAt DESC, pph.Id DESC
             ) latest
+            OUTER APPLY (
+                SELECT TOP 1
+                       CAST(CASE WHEN dc.cantidad > 0 THEN dc.costo_total / dc.cantidad ELSE 0 END AS decimal(18, 2)) AS Cost
+                FROM dbo.detallecompra dc
+                INNER JOIN dbo.compra c ON c.id = dc.id_compra
+                WHERE dc.id_producto = p.id
+                ORDER BY c.fecha_compra DESC, dc.id DESC
+            ) latestCost
+            OUTER APPLY (
+                SELECT TOP 1 CAST(l.costo_unitario AS decimal(18, 2)) AS Cost
+                FROM dbo.lote l
+                WHERE l.id_producto = p.id
+                ORDER BY l.fecha_ingreso DESC, l.id DESC
+            ) latestLot
             WHERE pm.IsActive = 1 AND pm.Decision IN ('AUTO_MATCH', 'REVIEW', 'MANUAL_MATCH')
             ORDER BY pm.Decision, p.nombre, s.Name, sp.OriginalName;
             """;
@@ -45,6 +60,7 @@ public class ScrapingRepository : IScrapingRepository
                 InternalProductName = reader["InternalProductName"] == DBNull.Value ? null : reader["InternalProductName"].ToString(),
                 InternalProductSku = reader["InternalProductSku"] == DBNull.Value ? null : reader["InternalProductSku"].ToString(),
                 InternalProductPrice = reader["InternalProductPrice"] == DBNull.Value ? null : Convert.ToDecimal(reader["InternalProductPrice"]),
+                InternalProductCost = reader["InternalProductCost"] == DBNull.Value ? null : Convert.ToDecimal(reader["InternalProductCost"]),
                 ScrapedProductId = Convert.ToInt64(reader["ScrapedProductId"]),
                 Store = reader["Store"].ToString() ?? string.Empty,
                 Name = reader["Name"].ToString() ?? string.Empty,
