@@ -23,17 +23,7 @@ namespace ApiLinaAgbd.Controllers.Facturacion.NotaDebito
 		}
 
 		[HttpPost("comprobantes/notas/debito")]
-		public async Task<IActionResult> EmitirNotaDebito([FromBody] NotaDebitoEmitirRequestDto request)
-		{
-			try
-			{
-				var resultado = await _notaDebitoService.EmitirAsync(request);
-				return resultado.EstadoSunat == "PENDIENTE_ENVIO" ? Accepted(resultado) : Ok(resultado);
-			}
-			catch (InvalidOperationException ex)
-			{
-				return BadRequest(new { mensaje = ex.Message });
-			}
-		}
+		public IActionResult EmitirNotaDebito([FromBody] NotaDebitoEmitirRequestDto request) =>
+			BadRequest(new { mensaje = "La emisión de notas de débito está deshabilitada." });
 	}
 }

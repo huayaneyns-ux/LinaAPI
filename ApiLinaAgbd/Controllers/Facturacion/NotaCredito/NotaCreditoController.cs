@@ -24,17 +24,7 @@ namespace ApiLinaAgbd.Controllers.Facturacion.NotaCredito
 		}
 
 		[HttpPost("comprobantes/notas/credito")]
-		public async Task<IActionResult> EmitirNotaCredito([FromBody] NotaCreditoEmitirRequestDto request)
-		{
-			try
-			{
-				var resultado = await _notaCreditoService.EmitirAsync(request);
-				return Ok(resultado);
-			}
-			catch (InvalidOperationException ex)
-			{
-				return BadRequest(new { mensaje = ex.Message });
-			}
-		}
+		public IActionResult EmitirNotaCredito([FromBody] NotaCreditoEmitirRequestDto request) =>
+			BadRequest(new { mensaje = "La emisión de notas de crédito está deshabilitada." });
 	}
 }

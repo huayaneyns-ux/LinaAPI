@@ -445,6 +445,17 @@ namespace ApiLinaAgbd.Services.Facturacion.ComprobantesVenta
 		public async Task<ComprobanteVentaListItemDto> AnularAsync(string id, string reason)
 		{
 			var voucher = await ObtenerComprobantePorIdAsync(id);
+			if (voucher.Tipo is "BOLETA" or "NOTA_CREDITO" or "NOTA_DEBITO")
+			{
+				throw new InvalidOperationException("Este tipo de documento no puede anularse desde el sistema.");
+			}
+
+			if (!DateTime.TryParse(voucher.FechaEmision, out var fechaEmision)
+				|| (DateTime.Today - fechaEmision.Date).TotalDays > 5)
+			{
+				throw new InvalidOperationException("El comprobante solo puede anularse hasta 5 días después de su emisión.");
+			}
+
 			if (EsAnulacionConfirmada(voucher.Estado, voucher.EstadoSunat))
 			{
 				throw new InvalidOperationException("El comprobante ya fue anulado y confirmado por SUNAT.");
