@@ -26,13 +26,15 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 					SELECT
 						u.id AS id_usuario,
 						u.nombre_apellido,
+						COALESCE(d.tipo_documento, 'DNI') AS tipo_documento,
 						COALESCE(d.numero, '') AS dni,
 						COALESCE(u.sexo, '') AS sexo,
 						u.telefono,
 						COALESCE(u.correo, '') AS correo,
 						u.id_rol,
 						COALESCE(r.nombre, '') AS rol,
-						u.estado
+						u.estado,
+						u.origen
 					FROM dbo.usuario u
 					LEFT JOIN dbo.documento d ON d.id = u.id_documento
 					LEFT JOIN dbo.rol r ON r.id = u.id_rol
@@ -49,6 +51,7 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 						id = Convert.ToInt32(dr["id_usuario"]),
 						nombreApellido = dr["nombre_apellido"]
 							.ToString() ?? "",
+						tipoDocumento = dr["tipo_documento"].ToString() ?? "DNI",
 						dni = dr["dni"]
 							.ToString() ?? "",
 						sexo = dr["sexo"]
@@ -63,7 +66,8 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 							.ToString() ?? "",
 						estado = Convert.ToBoolean(
 							dr["estado"]
-						)
+						),
+						origen = dr["origen"] == DBNull.Value ? null : dr["origen"].ToString()
 					});
 				}
 			}
@@ -83,13 +87,15 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 					SELECT
 						u.id,
 						u.nombre_apellido,
+						COALESCE(d.tipo_documento, 'DNI') AS tipo_documento,
 						COALESCE(d.numero, '') AS dni,
 						COALESCE(u.sexo, '') AS sexo,
 						u.telefono,
 						COALESCE(u.correo, '') AS correo,
 						u.id_rol,
 						COALESCE(r.nombre, '') AS rol,
-						u.estado
+						u.estado,
+						u.origen
 					FROM dbo.usuario u
 					LEFT JOIN dbo.documento d ON d.id = u.id_documento
 					LEFT JOIN dbo.rol r ON r.id = u.id_rol
@@ -112,6 +118,7 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 						id = Convert.ToInt32(dr["id"]),
 						nombreApellido = dr["nombre_apellido"]
 							.ToString() ?? "",
+						tipoDocumento = dr["tipo_documento"].ToString() ?? "DNI",
 						dni = dr["dni"]
 							.ToString() ?? "",
 						sexo = dr["sexo"]
@@ -128,13 +135,50 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 							.ToString() ?? "",
 						estado = Convert.ToBoolean(
 							dr["estado"]
-						)
+						),
+						origen = dr["origen"] == DBNull.Value ? null : dr["origen"].ToString()
 					};
 				}
 			}
 
 			return usuario;
 		}
+
+		public UsuarioSelectDto? ObtenerPorDocumento(string tipoDocumento, string numero)
+		{
+			using SqlConnection con = _conexion.ObtenerConexion();
+			con.Open();
+
+			const string sql = @"
+				SELECT TOP 1 u.id, u.nombre_apellido, COALESCE(d.tipo_documento, 'DNI') AS tipo_documento, COALESCE(d.numero, '') AS dni,
+					COALESCE(u.sexo, '') AS sexo, u.telefono, COALESCE(u.correo, '') AS correo,
+					u.id_rol, COALESCE(r.nombre, '') AS rol, u.estado, u.origen
+				FROM dbo.usuario u
+				INNER JOIN dbo.documento d ON d.id = u.id_documento
+				LEFT JOIN dbo.rol r ON r.id = u.id_rol
+				WHERE d.tipo_documento = @TipoDocumento AND d.numero = @Numero;";
+
+			using SqlCommand cmd = new(sql, con);
+			cmd.Parameters.AddWithValue("@TipoDocumento", tipoDocumento);
+			cmd.Parameters.AddWithValue("@Numero", numero);
+			using SqlDataReader dr = cmd.ExecuteReader();
+			return dr.Read() ? Mapear(dr) : null;
+		}
+
+		private static UsuarioSelectDto Mapear(SqlDataReader dr) => new()
+		{
+			id = Convert.ToInt32(dr["id"]),
+			nombreApellido = dr["nombre_apellido"].ToString() ?? string.Empty,
+			tipoDocumento = dr["tipo_documento"].ToString() ?? "DNI",
+			dni = dr["dni"].ToString() ?? string.Empty,
+			sexo = dr["sexo"].ToString() ?? string.Empty,
+			telefono = dr["telefono"] == DBNull.Value ? null : dr["telefono"].ToString(),
+			correo = dr["correo"].ToString() ?? string.Empty,
+			idRol = Convert.ToInt32(dr["id_rol"]),
+			rol = dr["rol"].ToString() ?? string.Empty,
+			estado = Convert.ToBoolean(dr["estado"]),
+			origen = dr["origen"] == DBNull.Value ? null : dr["origen"].ToString()
+		};
 
 		public int Guardar(UsuarioInsertUpdateDto modelo)
 		{
@@ -147,21 +191,21 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 					DECLARE @IdDocumento INT;
 					SELECT @IdDocumento = id
 					FROM dbo.documento
-					WHERE tipo_documento = 'DNI' AND numero = @DNI;
+						WHERE tipo_documento = @TipoDocumento AND numero = @DNI;
 
 					IF @IdDocumento IS NULL
 					BEGIN
 						INSERT INTO dbo.documento(tipo_documento, numero, nombre)
-						VALUES ('DNI', @DNI, @NombreApellido);
+						VALUES (@TipoDocumento, @DNI, @NombreApellido);
 						SET @IdDocumento = CONVERT(INT, SCOPE_IDENTITY());
 					END
 
 					IF @IdUsuario IS NULL
 					BEGIN
 						INSERT INTO dbo.usuario
-							(nombre_apellido, sexo, telefono, correo, contrasena, estado, id_rol, id_documento)
+							(nombre_apellido, sexo, telefono, correo, contrasena, estado, id_rol, id_documento, origen)
 						VALUES
-							(@NombreApellido, @Sexo, @Telefono, @Correo, @Contrasena, @Estado, @IdRol, @IdDocumento);
+							(@NombreApellido, @Sexo, @Telefono, @Correo, @Contrasena, @Estado, @IdRol, @IdDocumento, @Origen);
 						SET @IdUsuario = CONVERT(INT, SCOPE_IDENTITY());
 					END
 					ELSE
@@ -174,7 +218,8 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 							contrasena = @Contrasena,
 							estado = @Estado,
 							id_rol = @IdRol,
-							id_documento = @IdDocumento
+							id_documento = @IdDocumento,
+							origen = @Origen
 						WHERE id = @IdUsuario;
 					END
 
@@ -184,12 +229,14 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 				cmd.Parameters.AddWithValue("@IdUsuario", (object?)modelo.idUsuario ?? DBNull.Value);
 				cmd.Parameters.AddWithValue("@NombreApellido", modelo.nombreApellido);
 				cmd.Parameters.AddWithValue("@DNI", modelo.dni);
+				cmd.Parameters.AddWithValue("@TipoDocumento", modelo.tipoDocumento.Trim().ToUpperInvariant());
 				cmd.Parameters.AddWithValue("@Sexo", string.IsNullOrWhiteSpace(modelo.sexo) ? DBNull.Value : modelo.sexo);
 				cmd.Parameters.AddWithValue("@Telefono", (object?)modelo.telefono ?? DBNull.Value);
 				cmd.Parameters.AddWithValue("@Correo", modelo.correo);
 				cmd.Parameters.AddWithValue("@Contrasena", modelo.contrasena);
 				cmd.Parameters.AddWithValue("@IdRol", modelo.idRol);
 				cmd.Parameters.AddWithValue("@Estado", modelo.estado);
+				cmd.Parameters.AddWithValue("@Origen", (object?)modelo.origen ?? DBNull.Value);
 
 				SqlDataReader dr =
 					cmd.ExecuteReader();

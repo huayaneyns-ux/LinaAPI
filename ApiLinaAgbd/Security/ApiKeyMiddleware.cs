@@ -18,11 +18,13 @@ namespace ApiLinaAgbd.Security
 		];
 
 		private readonly RequestDelegate _next;
+		private readonly IConfiguration _configuration;
 		private readonly string _apiKey;
 
 		public ApiKeyMiddleware(RequestDelegate next, IConfiguration configuration)
 		{
 			_next = next;
+			_configuration = configuration;
 			_apiKey = configuration[ConfigKey]?.Trim() ?? string.Empty;
 		}
 
@@ -34,18 +36,25 @@ namespace ApiLinaAgbd.Security
 				return;
 			}
 
-			if (string.IsNullOrWhiteSpace(_apiKey))
+			var esRutaIntegracion = EsRutaIntegracion(context.Request.Path);
+			var claveEsperada = esRutaIntegracion
+				? _configuration["INTEGRACION_API_KEY_LINA"]?.Trim() ?? string.Empty
+				: _apiKey;
+
+			if (string.IsNullOrWhiteSpace(claveEsperada))
 			{
 				context.Response.StatusCode = StatusCodes.Status500InternalServerError;
 				await context.Response.WriteAsJsonAsync(new
 				{
-					mensaje = $"Falta configurar {ConfigKey} en el archivo .env"
+					mensaje = esRutaIntegracion
+						? "Falta configurar INTEGRACION_API_KEY_LINA en el archivo .env"
+						: $"Falta configurar {ConfigKey} en el archivo .env"
 				});
 				return;
 			}
 
 			if (!context.Request.Headers.TryGetValue(HeaderName, out var provided) ||
-				!ClavesIguales(provided.ToString(), _apiKey))
+				!ClavesIguales(provided.ToString(), claveEsperada))
 			{
 				context.Response.StatusCode = StatusCodes.Status401Unauthorized;
 				await context.Response.WriteAsJsonAsync(new
@@ -82,5 +91,17 @@ namespace ApiLinaAgbd.Security
 
 			return CryptographicOperations.FixedTimeEquals(bytesA, bytesB);
 		}
+
+		private static bool EsClaveValida(PathString path, string proporcionada, string apiKey, string? claveIntegracion)
+		{
+			if (ClavesIguales(proporcionada, apiKey)) return true;
+			return (path.StartsWithSegments("/api/v1/clientes", StringComparison.OrdinalIgnoreCase) ||
+				path.StartsWithSegments("/api/v1/webhooks", StringComparison.OrdinalIgnoreCase)) &&
+				!string.IsNullOrWhiteSpace(claveIntegracion) && ClavesIguales(proporcionada, claveIntegracion);
+		}
+
+		private static bool EsRutaIntegracion(PathString path) =>
+			path.StartsWithSegments("/api/v1/clientes", StringComparison.OrdinalIgnoreCase) ||
+			path.StartsWithSegments("/api/v1/webhooks", StringComparison.OrdinalIgnoreCase);
 	}
 }
