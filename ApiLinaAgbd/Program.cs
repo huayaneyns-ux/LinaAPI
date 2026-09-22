@@ -39,6 +39,7 @@ using ApiLinaAgbd.Services.Inventario.Lote;
 using ApiLinaAgbd.Services.Inventario.Marca;
 using ApiLinaAgbd.Services.Inventario.Producto;
 using ApiLinaAgbd.Services.Inventario.UnidadMedida;
+using ApiLinaAgbd.Services.Integracion;
 using ApiLinaAgbd.Services.MetodoPago;
 using ApiLinaAgbd.Services.Persona;
 using ApiLinaAgbd.Services.Seguridad.Auth;
@@ -85,6 +86,10 @@ builder.Services.AddSwaggerGen(options =>
 	});
 });
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddHttpClient("IntegracionClientes", client =>
+{
+	client.Timeout = TimeSpan.FromSeconds(5);
+});
 
 builder.Services.Configure<FacturacionSettings>(
 	builder.Configuration.GetSection(FacturacionSettings.SectionName));
@@ -163,6 +168,7 @@ builder.Services.AddScoped<IRolRepository, RolRepository>();
 builder.Services.AddScoped<IRolService, RolService>();
 builder.Services.AddScoped<IUsuarioRepository, UsuarioRepository>();
 builder.Services.AddScoped<IUsuarioService, UsuarioService>();
+builder.Services.AddScoped<IIntegracionClientesService, IntegracionClientesService>();
 
 // MetodoPago
 builder.Services.AddScoped<IMetodoPagoRepository, MetodoPagoRepository>();

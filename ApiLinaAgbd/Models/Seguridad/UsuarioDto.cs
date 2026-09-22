@@ -15,6 +15,8 @@
 
 		public string dni { get; set; } = string.Empty;
 
+		public string tipoDocumento { get; set; } = "DNI";
+
 
 		public string sexo { get; set; } = string.Empty;
 
@@ -32,6 +34,8 @@
 
 
 		public bool estado { get; set; }
+
+		public string? origen { get; set; }
 
 	}
 
@@ -57,6 +61,8 @@
 
 		public string dni { get; set; } = string.Empty;
 
+		public string tipoDocumento { get; set; } = "DNI";
+
 
 
 		public string sexo { get; set; } = string.Empty;
@@ -80,6 +86,8 @@
 
 
 		public bool estado { get; set; } = true;
+
+		public string? origen { get; set; }
 
 	}
 

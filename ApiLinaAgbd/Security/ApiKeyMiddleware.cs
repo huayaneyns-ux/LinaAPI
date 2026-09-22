@@ -18,11 +18,13 @@ namespace ApiLinaAgbd.Security
 		];
 
 		private readonly RequestDelegate _next;
+		private readonly IConfiguration _configuration;
 		private readonly string _apiKey;
 
 		public ApiKeyMiddleware(RequestDelegate next, IConfiguration configuration)
 		{
 			_next = next;
+			_configuration = configuration;
 			_apiKey = configuration[ConfigKey]?.Trim() ?? string.Empty;
 		}
 
@@ -45,7 +47,8 @@ namespace ApiLinaAgbd.Security
 			}
 
 			if (!context.Request.Headers.TryGetValue(HeaderName, out var provided) ||
-				!ClavesIguales(provided.ToString(), _apiKey))
+				!EsClaveValida(context.Request.Path, provided.ToString(), _apiKey,
+					_configuration["INTEGRACION_API_KEY_LINA"]?.Trim()))
 			{
 				context.Response.StatusCode = StatusCodes.Status401Unauthorized;
 				await context.Response.WriteAsJsonAsync(new
@@ -81,6 +84,14 @@ namespace ApiLinaAgbd.Security
 			}
 
 			return CryptographicOperations.FixedTimeEquals(bytesA, bytesB);
+		}
+
+		private static bool EsClaveValida(PathString path, string proporcionada, string apiKey, string? claveIntegracion)
+		{
+			if (ClavesIguales(proporcionada, apiKey)) return true;
+			return (path.StartsWithSegments("/api/v1/clientes", StringComparison.OrdinalIgnoreCase) ||
+				path.StartsWithSegments("/api/v1/webhooks", StringComparison.OrdinalIgnoreCase)) &&
+				!string.IsNullOrWhiteSpace(claveIntegracion) && ClavesIguales(proporcionada, claveIntegracion);
 		}
 	}
 }

@@ -1,6 +1,7 @@
 using ApiLinaAgbd.Models.Seguridad;
 using ApiLinaAgbd.Repositories.Seguridad.Usuario;
 using ApiLinaAgbd.Services.Seguridad.Auth;
+using ApiLinaAgbd.Services.Integracion;
 
 namespace ApiLinaAgbd.Services.Seguridad.Usuario
 {
@@ -8,11 +9,13 @@ namespace ApiLinaAgbd.Services.Seguridad.Usuario
 	{
 		private readonly IUsuarioRepository _usuarioRepository;
 		private readonly IAuthService _authService;
+		private readonly IIntegracionClientesService _integracionClientesService;
 
-		public UsuarioService(IUsuarioRepository usuarioRepository, IAuthService authService)
+		public UsuarioService(IUsuarioRepository usuarioRepository, IAuthService authService, IIntegracionClientesService integracionClientesService)
 		{
 			_usuarioRepository = usuarioRepository;
 			_authService = authService;
+			_integracionClientesService = integracionClientesService;
 		}
 
 		public UsuarioLoginResponseDto? Login(UsuarioLoginDto modelo)
@@ -32,7 +35,25 @@ namespace ApiLinaAgbd.Services.Seguridad.Usuario
 
 		public int Guardar(UsuarioInsertUpdateDto modelo)
 		{
-			return _usuarioRepository.Guardar(modelo);
+			if (modelo.idRol == 1 && string.IsNullOrWhiteSpace(modelo.origen))
+			{
+				modelo.origen = "lina";
+			}
+
+			var id = _usuarioRepository.Guardar(modelo);
+			if (modelo.idUsuario is null && modelo.idRol == 1)
+			{
+				_ = _integracionClientesService.NotificarClienteNuevoAsync(new Models.Integracion.ClienteIntegracionDto
+				{
+					id = id,
+					nombre = modelo.nombreApellido,
+					documento = modelo.dni,
+					tipoDocumento = modelo.tipoDocumento,
+					telefono = modelo.telefono,
+					email = modelo.correo
+				});
+			}
+			return id;
 		}
 
 		public void Eliminar(int id)
