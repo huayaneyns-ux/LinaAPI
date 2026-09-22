@@ -14,6 +14,18 @@ public class ScrapingController : ControllerBase
     [HttpGet("matches")]
     public IActionResult ListarMatches() => Ok(_service.ListarMatches());
 
+    [HttpGet("products")]
+    public IActionResult ListarProductosScrapeados() => Ok(_service.ListarProductosScrapeados());
+
+    [HttpPost("matches/manual")]
+    public IActionResult CrearMatchManual([FromBody] ScrapingManualMatchDto match)
+    {
+        try { _service.CrearMatchManual(match); return Ok(new { mensaje = "Producto relacionado correctamente." }); }
+        catch (KeyNotFoundException ex) { return NotFound(new { mensaje = ex.Message }); }
+        catch (ArgumentException ex) { return BadRequest(new { mensaje = ex.Message }); }
+        catch (InvalidOperationException ex) { return Conflict(new { mensaje = ex.Message }); }
+    }
+
     [HttpPut("matches/{id:long}/decision")]
     public IActionResult ActualizarDecision(long id, [FromBody] ScrapingDecisionDto decision)
     {

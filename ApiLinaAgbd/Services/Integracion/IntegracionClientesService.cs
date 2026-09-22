@@ -35,16 +35,26 @@ public class IntegracionClientesService : IIntegracionClientesService
 	public (ClienteIntegracionDto Cliente, bool YaExistia) RegistrarClienteExterno(ClienteWebhookDto cliente)
 	{
 		var documento = cliente.documento?.Trim();
-		var tipoDocumento = string.IsNullOrWhiteSpace(cliente.tipoDocumento)
-			? (documento?.Length == 11 ? "RUC" : "DNI")
-			: cliente.tipoDocumento.Trim().ToUpperInvariant();
+		// El webhook externo solo maneja el número; el tipo se deduce internamente
+		// para consultar la tabla documento.
+		var tipoDocumento = documento?.Length == 11 ? "RUC" : "DNI";
 		var existente = string.IsNullOrWhiteSpace(documento)
 			? null
 			: _usuarioRepository.ObtenerPorDocumento(tipoDocumento, documento);
 
 		if (existente is not null && existente.idRol == RolCliente)
 		{
-			return (Mapear(existente), true);
+			var origen = string.IsNullOrWhiteSpace(cliente.origen) ? "acabados_js" : cliente.origen.Trim();
+			_usuarioRepository.ActualizarDatosIntegracion(
+				existente.id,
+				cliente.nombre.Trim(),
+				cliente.telefono,
+				cliente.email ?? string.Empty,
+				origen);
+
+			var actualizado = _usuarioRepository.Obtener(existente.id)
+				?? throw new InvalidOperationException("No se pudo recuperar el cliente actualizado.");
+			return (Mapear(actualizado), true);
 		}
 
 		var id = _usuarioRepository.Guardar(new UsuarioInsertUpdateDto
@@ -113,10 +123,8 @@ public class IntegracionClientesService : IIntegracionClientesService
 		id = usuario.id,
 		nombre = usuario.nombreApellido,
 		documento = usuario.dni,
-		tipoDocumento = usuario.tipoDocumento,
 		telefono = usuario.telefono,
 		email = usuario.correo,
-		direccion = null,
 		origen = usuario.origen
 	};
 }

@@ -48,7 +48,6 @@ namespace ApiLinaAgbd.Services.Seguridad.Usuario
 					id = id,
 					nombre = modelo.nombreApellido,
 					documento = modelo.dni,
-					tipoDocumento = modelo.tipoDocumento,
 					telefono = modelo.telefono,
 					email = modelo.correo
 				});

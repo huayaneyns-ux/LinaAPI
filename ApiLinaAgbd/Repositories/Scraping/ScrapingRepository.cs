@@ -74,6 +74,53 @@ public class ScrapingRepository : IScrapingRepository
         return result;
     }
 
+    public List<ScrapedProductOptionDto> ListarProductosScrapeados()
+    {
+        const string sql = """
+            SELECT sp.Id AS ScrapedProductId, s.Name AS Store, sp.OriginalName AS Name,
+                   COALESCE(latest.CurrentPrice, 0) AS Price, sp.Url,
+                   active.Id AS ActiveMatchId, active.ProductoId AS MatchedProductId,
+                   p.nombre AS MatchedProductName
+            FROM dbo.ScrapedProduct sp
+            INNER JOIN dbo.Store s ON s.Id = sp.StoreId
+            OUTER APPLY (
+                SELECT TOP 1 pph.CurrentPrice
+                FROM dbo.ProductPriceHistory pph
+                WHERE pph.ScrapedProductId = sp.Id
+                ORDER BY pph.CapturedAt DESC, pph.Id DESC
+            ) latest
+            OUTER APPLY (
+                SELECT TOP 1 pm.Id, pm.ProductoId
+                FROM dbo.ProductMatch pm
+                WHERE pm.ScrapedProductId = sp.Id AND pm.IsActive = 1
+                ORDER BY pm.Id DESC
+            ) active
+            LEFT JOIN dbo.producto p ON p.id = active.ProductoId
+            ORDER BY s.Name, sp.OriginalName;
+            """;
+
+        var result = new List<ScrapedProductOptionDto>();
+        using var connection = _conexion.ObtenerConexion();
+        connection.Open();
+        using var command = new SqlCommand(sql, connection);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(new ScrapedProductOptionDto
+            {
+                ScrapedProductId = Convert.ToInt64(reader["ScrapedProductId"]),
+                Store = reader["Store"].ToString() ?? string.Empty,
+                Name = reader["Name"].ToString() ?? string.Empty,
+                Price = Convert.ToDecimal(reader["Price"]),
+                Url = reader["Url"].ToString() ?? string.Empty,
+                ActiveMatchId = reader["ActiveMatchId"] == DBNull.Value ? null : Convert.ToInt64(reader["ActiveMatchId"]),
+                MatchedProductId = reader["MatchedProductId"] == DBNull.Value ? null : Convert.ToInt32(reader["MatchedProductId"]),
+                MatchedProductName = reader["MatchedProductName"] == DBNull.Value ? null : reader["MatchedProductName"].ToString(),
+            });
+        }
+        return result;
+    }
+
     public void ActualizarDecision(long matchId, ScrapingDecisionDto decision)
     {
         if (decision.Decision is not ("MANUAL_MATCH" or "NO_MATCH"))
@@ -117,6 +164,81 @@ public class ScrapingRepository : IScrapingRepository
             updateCommand.Parameters.Add("@ReviewedBy", SqlDbType.NVarChar, 150).Value = (object?)decision.ReviewedBy ?? DBNull.Value;
             updateCommand.Parameters.Add("@Id", SqlDbType.BigInt).Value = matchId;
             if (updateCommand.ExecuteNonQuery() == 0) throw new KeyNotFoundException("La coincidencia ya fue procesada.");
+            transaction.Commit();
+        }
+        catch { transaction.Rollback(); throw; }
+    }
+
+    public void CrearMatchManual(ScrapingManualMatchDto match)
+    {
+        if (match.ScrapedProductId <= 0 || match.ProductoId <= 0)
+            throw new ArgumentException("Debes seleccionar un producto de tu tienda y uno scrapeado.");
+
+        using var connection = _conexion.ObtenerConexion();
+        connection.Open();
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        try
+        {
+            long storeId;
+            long? activeMatchId = null;
+            int? activeProductId = null;
+            using (var lookup = new SqlCommand("""
+                SELECT sp.StoreId, pm.Id, pm.ProductoId
+                FROM dbo.ScrapedProduct sp
+                LEFT JOIN dbo.ProductMatch pm ON pm.ScrapedProductId = sp.Id AND pm.IsActive = 1
+                WHERE sp.Id = @ScrapedProductId;
+                """, connection, transaction))
+            {
+                lookup.Parameters.Add("@ScrapedProductId", SqlDbType.BigInt).Value = match.ScrapedProductId;
+                using var reader = lookup.ExecuteReader();
+                if (!reader.Read()) throw new KeyNotFoundException("El producto scrapeado no existe.");
+                storeId = Convert.ToInt64(reader["StoreId"]);
+                if (reader["Id"] != DBNull.Value) activeMatchId = Convert.ToInt64(reader["Id"]);
+                if (reader["ProductoId"] != DBNull.Value) activeProductId = Convert.ToInt32(reader["ProductoId"]);
+            }
+
+            if (activeProductId is not null && activeProductId != match.ProductoId)
+                throw new InvalidOperationException("Ese producto scrapeado ya está relacionado con otro producto.");
+
+            const string deactivate = """
+                UPDATE pm SET IsActive = 0, ReviewedBy = @ReviewedBy, ReviewedAt = SYSUTCDATETIME()
+                FROM dbo.ProductMatch pm
+                INNER JOIN dbo.ScrapedProduct sp ON sp.Id = pm.ScrapedProductId
+                WHERE pm.IsActive = 1 AND pm.ProductoId = @ProductoId AND sp.StoreId = @StoreId
+                  AND (@CurrentMatchId IS NULL OR pm.Id <> @CurrentMatchId);
+                """;
+            using (var deactivateCommand = new SqlCommand(deactivate, connection, transaction))
+            {
+                deactivateCommand.Parameters.Add("@ReviewedBy", SqlDbType.NVarChar, 150).Value = (object?)match.ReviewedBy ?? DBNull.Value;
+                deactivateCommand.Parameters.Add("@ProductoId", SqlDbType.Int).Value = match.ProductoId;
+                deactivateCommand.Parameters.Add("@StoreId", SqlDbType.BigInt).Value = storeId;
+                deactivateCommand.Parameters.Add("@CurrentMatchId", SqlDbType.BigInt).Value = (object?)activeMatchId ?? DBNull.Value;
+                deactivateCommand.ExecuteNonQuery();
+            }
+
+            if (activeMatchId is not null)
+            {
+                using var update = new SqlCommand("""
+                    UPDATE dbo.ProductMatch SET ProductoId = @ProductoId, Decision = 'MANUAL_MATCH',
+                        ReviewedBy = @ReviewedBy, ReviewedAt = SYSUTCDATETIME()
+                    WHERE Id = @Id AND IsActive = 1;
+                    """, connection, transaction);
+                update.Parameters.Add("@ProductoId", SqlDbType.Int).Value = match.ProductoId;
+                update.Parameters.Add("@ReviewedBy", SqlDbType.NVarChar, 150).Value = (object?)match.ReviewedBy ?? DBNull.Value;
+                update.Parameters.Add("@Id", SqlDbType.BigInt).Value = activeMatchId.Value;
+                update.ExecuteNonQuery();
+            }
+            else
+            {
+                using var insert = new SqlCommand("""
+                    INSERT INTO dbo.ProductMatch (ScrapedProductId, ProductoId, Decision, Score, IsActive, ReviewedBy, ReviewedAt)
+                    VALUES (@ScrapedProductId, @ProductoId, 'MANUAL_MATCH', NULL, 1, @ReviewedBy, SYSUTCDATETIME());
+                    """, connection, transaction);
+                insert.Parameters.Add("@ScrapedProductId", SqlDbType.BigInt).Value = match.ScrapedProductId;
+                insert.Parameters.Add("@ProductoId", SqlDbType.Int).Value = match.ProductoId;
+                insert.Parameters.Add("@ReviewedBy", SqlDbType.NVarChar, 150).Value = (object?)match.ReviewedBy ?? DBNull.Value;
+                insert.ExecuteNonQuery();
+            }
             transaction.Commit();
         }
         catch { transaction.Rollback(); throw; }
