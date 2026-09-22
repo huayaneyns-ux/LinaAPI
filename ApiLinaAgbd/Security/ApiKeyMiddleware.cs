@@ -36,19 +36,25 @@ namespace ApiLinaAgbd.Security
 				return;
 			}
 
-			if (string.IsNullOrWhiteSpace(_apiKey))
+			var esRutaIntegracion = EsRutaIntegracion(context.Request.Path);
+			var claveEsperada = esRutaIntegracion
+				? _configuration["INTEGRACION_API_KEY_LINA"]?.Trim() ?? string.Empty
+				: _apiKey;
+
+			if (string.IsNullOrWhiteSpace(claveEsperada))
 			{
 				context.Response.StatusCode = StatusCodes.Status500InternalServerError;
 				await context.Response.WriteAsJsonAsync(new
 				{
-					mensaje = $"Falta configurar {ConfigKey} en el archivo .env"
+					mensaje = esRutaIntegracion
+						? "Falta configurar INTEGRACION_API_KEY_LINA en el archivo .env"
+						: $"Falta configurar {ConfigKey} en el archivo .env"
 				});
 				return;
 			}
 
 			if (!context.Request.Headers.TryGetValue(HeaderName, out var provided) ||
-				!EsClaveValida(context.Request.Path, provided.ToString(), _apiKey,
-					_configuration["INTEGRACION_API_KEY_LINA"]?.Trim()))
+				!ClavesIguales(provided.ToString(), claveEsperada))
 			{
 				context.Response.StatusCode = StatusCodes.Status401Unauthorized;
 				await context.Response.WriteAsJsonAsync(new
@@ -93,5 +99,9 @@ namespace ApiLinaAgbd.Security
 				path.StartsWithSegments("/api/v1/webhooks", StringComparison.OrdinalIgnoreCase)) &&
 				!string.IsNullOrWhiteSpace(claveIntegracion) && ClavesIguales(proporcionada, claveIntegracion);
 		}
+
+		private static bool EsRutaIntegracion(PathString path) =>
+			path.StartsWithSegments("/api/v1/clientes", StringComparison.OrdinalIgnoreCase) ||
+			path.StartsWithSegments("/api/v1/webhooks", StringComparison.OrdinalIgnoreCase);
 	}
 }

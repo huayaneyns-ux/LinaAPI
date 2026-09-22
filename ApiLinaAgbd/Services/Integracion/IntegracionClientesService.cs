@@ -78,11 +78,12 @@ public class IntegracionClientesService : IIntegracionClientesService
 			return;
 		}
 
-		var payload = new ClienteWebhookDto
+		// Contrato compatible con el manual de Acabados J&S.
+		// El tipo de documento se conserva internamente en Lina; ellos reciben documento.
+		var payload = new
 		{
 			nombre = cliente.nombre,
 			documento = cliente.documento,
-			tipoDocumento = cliente.tipoDocumento,
 			telefono = cliente.telefono,
 			email = cliente.email,
 			origen = "lina"

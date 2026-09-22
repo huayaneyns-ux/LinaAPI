@@ -196,7 +196,7 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 					IF @IdDocumento IS NULL
 					BEGIN
 						INSERT INTO dbo.documento(tipo_documento, numero, nombre)
-						VALUES ('DNI', @DNI, @NombreApellido);
+						VALUES (@TipoDocumento, @DNI, @NombreApellido);
 						SET @IdDocumento = CONVERT(INT, SCOPE_IDENTITY());
 					END
 
