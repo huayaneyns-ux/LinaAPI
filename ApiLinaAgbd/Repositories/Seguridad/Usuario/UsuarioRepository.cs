@@ -165,26 +165,25 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 			return dr.Read() ? Mapear(dr) : null;
 		}
 
-		public void ActualizarDatosIntegracion(int id, string nombreApellido, string? telefono, string correo, string origen)
+		public UsuarioSelectDto? ObtenerPorCorreo(string correo)
 		{
 			using SqlConnection con = _conexion.ObtenerConexion();
 			con.Open();
 
 			const string sql = @"
-				UPDATE dbo.usuario
-				SET nombre_apellido = @NombreApellido,
-					telefono = @Telefono,
-					correo = @Correo,
-					origen = @Origen
-				WHERE id = @IdUsuario AND id_rol = 1;";
+				SELECT TOP 1 u.id, u.nombre_apellido, COALESCE(d.tipo_documento, 'DNI') AS tipo_documento,
+					COALESCE(d.numero, '') AS dni, COALESCE(u.sexo, '') AS sexo, u.telefono,
+					COALESCE(u.correo, '') AS correo, u.id_rol, COALESCE(r.nombre, '') AS rol,
+					u.estado, u.origen
+				FROM dbo.usuario u
+				LEFT JOIN dbo.documento d ON d.id = u.id_documento
+				LEFT JOIN dbo.rol r ON r.id = u.id_rol
+				WHERE LOWER(LTRIM(RTRIM(u.correo))) = LOWER(LTRIM(RTRIM(@Correo)));";
 
 			using SqlCommand cmd = new(sql, con);
-			cmd.Parameters.AddWithValue("@IdUsuario", id);
-			cmd.Parameters.AddWithValue("@NombreApellido", nombreApellido);
-			cmd.Parameters.AddWithValue("@Telefono", (object?)telefono ?? DBNull.Value);
 			cmd.Parameters.AddWithValue("@Correo", correo);
-			cmd.Parameters.AddWithValue("@Origen", origen);
-			cmd.ExecuteNonQuery();
+			using SqlDataReader dr = cmd.ExecuteReader();
+			return dr.Read() ? Mapear(dr) : null;
 		}
 
 		private static UsuarioSelectDto Mapear(SqlDataReader dr) => new()

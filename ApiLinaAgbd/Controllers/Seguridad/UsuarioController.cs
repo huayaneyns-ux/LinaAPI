@@ -73,13 +73,25 @@ namespace ApiLinaAgbd.Controllers.Seguridad
 			UsuarioInsertUpdateDto modelo
 		)
 		{
-			var idUsuario = _usuarioService.Guardar(modelo);
-
-			return Ok(new
+			try
 			{
-				success = true,
-				idUsuario
-			});
+				var idUsuario = _usuarioService.Guardar(modelo);
+
+				return Ok(new
+				{
+					success = true,
+					idUsuario
+				});
+			}
+			catch (UsuarioDuplicadoException exception)
+			{
+				return Conflict(new
+				{
+					code = "USUARIO_YA_EXISTE",
+					campo = exception.Campo,
+					mensaje = exception.Message
+				});
+			}
 		}
 
 		//=========================================
