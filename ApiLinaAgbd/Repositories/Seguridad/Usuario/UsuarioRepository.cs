@@ -165,6 +165,28 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 			return dr.Read() ? Mapear(dr) : null;
 		}
 
+		public void ActualizarDatosIntegracion(int id, string nombreApellido, string? telefono, string correo, string origen)
+		{
+			using SqlConnection con = _conexion.ObtenerConexion();
+			con.Open();
+
+			const string sql = @"
+				UPDATE dbo.usuario
+				SET nombre_apellido = @NombreApellido,
+					telefono = @Telefono,
+					correo = @Correo,
+					origen = @Origen
+				WHERE id = @IdUsuario AND id_rol = 1;";
+
+			using SqlCommand cmd = new(sql, con);
+			cmd.Parameters.AddWithValue("@IdUsuario", id);
+			cmd.Parameters.AddWithValue("@NombreApellido", nombreApellido);
+			cmd.Parameters.AddWithValue("@Telefono", (object?)telefono ?? DBNull.Value);
+			cmd.Parameters.AddWithValue("@Correo", correo);
+			cmd.Parameters.AddWithValue("@Origen", origen);
+			cmd.ExecuteNonQuery();
+		}
+
 		private static UsuarioSelectDto Mapear(SqlDataReader dr) => new()
 		{
 			id = Convert.ToInt32(dr["id"]),

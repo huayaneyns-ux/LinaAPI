@@ -6,8 +6,9 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 	{
 		List<UsuarioSelectDto> Listar();
 		UsuarioSelectDto? Obtener(int id);
-		UsuarioSelectDto? ObtenerPorDocumento(string tipoDocumento, string numero);
-		int Guardar(UsuarioInsertUpdateDto modelo);
+	UsuarioSelectDto? ObtenerPorDocumento(string tipoDocumento, string numero);
+	void ActualizarDatosIntegracion(int id, string nombreApellido, string? telefono, string correo, string origen);
+	int Guardar(UsuarioInsertUpdateDto modelo);
 		void Eliminar(int id);
 	}
 }
