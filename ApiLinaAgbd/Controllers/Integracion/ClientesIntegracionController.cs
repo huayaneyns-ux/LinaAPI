@@ -24,6 +24,16 @@ public class ClientesIntegracionController : ControllerBase
 		}
 
 		var resultado = _service.RegistrarClienteExterno(cliente);
-		return resultado.YaExistia ? Ok(resultado.Cliente) : StatusCode(StatusCodes.Status201Created, resultado.Cliente);
+		if (resultado.YaExistia)
+		{
+			var campo = resultado.CampoDuplicado == "correo" ? "correo electrónico" : "documento";
+			return Conflict(new
+			{
+				code = "CLIENTE_YA_EXISTE",
+				detail = $"Ya existe una cuenta con ese {campo}."
+			});
+		}
+
+		return StatusCode(StatusCodes.Status201Created, resultado.Cliente);
 	}
 }

@@ -35,6 +35,27 @@ namespace ApiLinaAgbd.Services.Seguridad.Usuario
 
 		public int Guardar(UsuarioInsertUpdateDto modelo)
 		{
+			var documento = modelo.dni?.Trim();
+			if (!string.IsNullOrWhiteSpace(documento))
+			{
+				var tipoDocumento = modelo.tipoDocumento.Trim().ToUpperInvariant();
+				var usuarioConDocumento = _usuarioRepository.ObtenerPorDocumento(tipoDocumento, documento);
+				if (usuarioConDocumento is not null && usuarioConDocumento.id != modelo.idUsuario)
+				{
+					throw new UsuarioDuplicadoException("dni", "Ya existe una cuenta con ese DNI/documento.");
+				}
+			}
+
+			var correo = modelo.correo?.Trim() ?? string.Empty;
+			if (!string.IsNullOrWhiteSpace(correo))
+			{
+				var usuarioConCorreo = _usuarioRepository.ObtenerPorCorreo(correo);
+				if (usuarioConCorreo is not null && usuarioConCorreo.id != modelo.idUsuario)
+				{
+					throw new UsuarioDuplicadoException("correo", "Ya existe una cuenta con ese correo electrónico.");
+				}
+			}
+
 			if (modelo.idRol == 1 && string.IsNullOrWhiteSpace(modelo.origen))
 			{
 				modelo.origen = "lina";

@@ -32,7 +32,7 @@ public class IntegracionClientesService : IIntegracionClientesService
 			.ToList();
 	}
 
-	public (ClienteIntegracionDto Cliente, bool YaExistia) RegistrarClienteExterno(ClienteWebhookDto cliente)
+	public (ClienteIntegracionDto Cliente, bool YaExistia, string? CampoDuplicado) RegistrarClienteExterno(ClienteWebhookDto cliente)
 	{
 		var documento = cliente.documento?.Trim();
 		// El webhook externo solo maneja el número; el tipo se deduce internamente
@@ -42,19 +42,18 @@ public class IntegracionClientesService : IIntegracionClientesService
 			? null
 			: _usuarioRepository.ObtenerPorDocumento(tipoDocumento, documento);
 
-		if (existente is not null && existente.idRol == RolCliente)
+		if (existente is not null)
 		{
-			var origen = string.IsNullOrWhiteSpace(cliente.origen) ? "acabados_js" : cliente.origen.Trim();
-			_usuarioRepository.ActualizarDatosIntegracion(
-				existente.id,
-				cliente.nombre.Trim(),
-				cliente.telefono,
-				cliente.email ?? string.Empty,
-				origen);
+			return (Mapear(existente), true, "documento");
+		}
 
-			var actualizado = _usuarioRepository.Obtener(existente.id)
-				?? throw new InvalidOperationException("No se pudo recuperar el cliente actualizado.");
-			return (Mapear(actualizado), true);
+		var correo = cliente.email?.Trim();
+		var existentePorCorreo = string.IsNullOrWhiteSpace(correo)
+			? null
+			: _usuarioRepository.ObtenerPorCorreo(correo);
+		if (existentePorCorreo is not null)
+		{
+			return (Mapear(existentePorCorreo), true, "correo");
 		}
 
 		var id = _usuarioRepository.Guardar(new UsuarioInsertUpdateDto
@@ -74,7 +73,7 @@ public class IntegracionClientesService : IIntegracionClientesService
 
 		var registrado = _usuarioRepository.Obtener(id)
 			?? throw new InvalidOperationException("No se pudo recuperar el cliente recién registrado.");
-		return (Mapear(registrado), false);
+		return (Mapear(registrado), false, null);
 	}
 
 	public async Task NotificarClienteNuevoAsync(ClienteIntegracionDto cliente)
