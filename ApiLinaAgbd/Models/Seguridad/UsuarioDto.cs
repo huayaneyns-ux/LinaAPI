@@ -35,7 +35,7 @@
 
 		public bool estado { get; set; }
 
-		public string? origen { get; set; }
+		public int? idIntegracionSistema { get; set; }
 
 	}
 
@@ -87,7 +87,7 @@
 
 		public bool estado { get; set; } = true;
 
-		public string? origen { get; set; }
+		public int? idIntegracionSistema { get; set; }
 
 	}
 

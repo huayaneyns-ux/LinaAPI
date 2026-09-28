@@ -1,6 +1,7 @@
 using ApiLinaAgbd.Models.Integracion;
 using ApiLinaAgbd.Models.Seguridad;
 using ApiLinaAgbd.Repositories.Seguridad.Usuario;
+using ApiLinaAgbd.Repositories.Integracion;
 
 namespace ApiLinaAgbd.Services.Integracion;
 
@@ -11,17 +12,20 @@ public class IntegracionClientesService : IIntegracionClientesService
 	private readonly IHttpClientFactory _httpClientFactory;
 	private readonly IConfiguration _configuration;
 	private readonly ILogger<IntegracionClientesService> _logger;
+	private readonly IIntegracionRepository _integracionRepository;
 
 	public IntegracionClientesService(
 		IUsuarioRepository usuarioRepository,
 		IHttpClientFactory httpClientFactory,
 		IConfiguration configuration,
-		ILogger<IntegracionClientesService> logger)
+		ILogger<IntegracionClientesService> logger,
+		IIntegracionRepository integracionRepository)
 	{
 		_usuarioRepository = usuarioRepository;
 		_httpClientFactory = httpClientFactory;
 		_configuration = configuration;
 		_logger = logger;
+		_integracionRepository = integracionRepository;
 	}
 
 	public List<ClienteIntegracionDto> ListarClientes()
@@ -32,7 +36,7 @@ public class IntegracionClientesService : IIntegracionClientesService
 			.ToList();
 	}
 
-	public (ClienteIntegracionDto Cliente, bool YaExistia, string? CampoDuplicado) RegistrarClienteExterno(ClienteWebhookDto cliente)
+	public (ClienteIntegracionDto Cliente, bool YaExistia, string? CampoDuplicado) RegistrarClienteExterno(ClienteWebhookDto cliente, string integrationKey)
 	{
 		var documento = cliente.documento?.Trim();
 		// El webhook externo solo maneja el número; el tipo se deduce internamente
@@ -56,6 +60,9 @@ public class IntegracionClientesService : IIntegracionClientesService
 			return (Mapear(existentePorCorreo), true, "correo");
 		}
 
+		var idIntegracion = _integracionRepository.ObtenerIdPorApiKey(integrationKey)
+			?? throw new UnauthorizedAccessException("La clave de integración no corresponde a una empresa activa.");
+
 		var id = _usuarioRepository.Guardar(new UsuarioInsertUpdateDto
 		{
 			nombreApellido = cliente.nombre.Trim(),
@@ -68,7 +75,7 @@ public class IntegracionClientesService : IIntegracionClientesService
 			contrasena = Guid.NewGuid().ToString("N"),
 			idRol = RolCliente,
 			estado = true,
-			origen = string.IsNullOrWhiteSpace(cliente.origen) ? "acabados_js" : cliente.origen.Trim()
+			idIntegracionSistema = idIntegracion
 		});
 
 		var registrado = _usuarioRepository.Obtener(id)
@@ -95,7 +102,6 @@ public class IntegracionClientesService : IIntegracionClientesService
 			documento = cliente.documento,
 			telefono = cliente.telefono,
 			email = cliente.email,
-			origen = "lina"
 		};
 
 		try
@@ -124,6 +130,5 @@ public class IntegracionClientesService : IIntegracionClientesService
 		documento = usuario.dni,
 		telefono = usuario.telefono,
 		email = usuario.correo,
-		origen = usuario.origen
 	};
 }

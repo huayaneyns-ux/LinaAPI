@@ -5,6 +5,6 @@ namespace ApiLinaAgbd.Services.Integracion;
 public interface IIntegracionClientesService
 {
 	List<ClienteIntegracionDto> ListarClientes();
-	(ClienteIntegracionDto Cliente, bool YaExistia, string? CampoDuplicado) RegistrarClienteExterno(ClienteWebhookDto cliente);
+	(ClienteIntegracionDto Cliente, bool YaExistia, string? CampoDuplicado) RegistrarClienteExterno(ClienteWebhookDto cliente, string integrationKey);
 	Task NotificarClienteNuevoAsync(ClienteIntegracionDto cliente);
 }

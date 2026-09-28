@@ -16,9 +16,11 @@ using ApiLinaAgbd.Repositories.Inventario.Lote;
 using ApiLinaAgbd.Repositories.Inventario.Marca;
 using ApiLinaAgbd.Repositories.Inventario.Producto;
 using ApiLinaAgbd.Repositories.Inventario.UnidadMedida;
+using ApiLinaAgbd.Repositories.Integracion;
 using ApiLinaAgbd.Repositories.MetodoPago;
 using ApiLinaAgbd.Repositories.Persona;
 using ApiLinaAgbd.Repositories.Seguridad.Auth;
+using ApiLinaAgbd.Repositories.Seguridad.Auditoria;
 using ApiLinaAgbd.Repositories.Seguridad.Rol;
 using ApiLinaAgbd.Repositories.Seguridad.Usuario;
 using ApiLinaAgbd.Repositories.Ventas.Caja;
@@ -164,11 +166,14 @@ builder.Services.AddScoped<IVentaRealizadaService, VentaRealizadaService>();
 // Seguridad
 builder.Services.AddScoped<IAuthRepository, AuthRepository>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IAuditoriaRepository, AuditoriaRepository>();
 builder.Services.AddScoped<IRolRepository, RolRepository>();
 builder.Services.AddScoped<IRolService, RolService>();
 builder.Services.AddScoped<IUsuarioRepository, UsuarioRepository>();
 builder.Services.AddScoped<IUsuarioService, UsuarioService>();
 builder.Services.AddScoped<IIntegracionClientesService, IntegracionClientesService>();
+builder.Services.AddScoped<IIntegracionRepository, IntegracionRepository>();
+builder.Services.AddScoped<IntegracionService>();
 
 // MetodoPago
 builder.Services.AddScoped<IMetodoPagoRepository, MetodoPagoRepository>();
