@@ -9,6 +9,7 @@ public interface IIntegracionRepository
     int? ObtenerIdPorApiKey(string apiKey);
     int GuardarConfiguracion(IntegracionConfiguracionGuardarDto dto, int? id = null);
     (List<IntegracionProductoDto> Productos, List<IntegracionProveedorDto> Proveedores) ObtenerCatalogo(string apiKey, long auditoriaId, string? tipo = null);
+    List<ClienteIntegracionDto> ObtenerClientesExpuestos(string apiKey, long auditoriaId);
     long IniciarAuditoria(string apiKey, string operacion, DateTime inicio, string? ip);
     void FinalizarAuditoria(long id, DateTime fin, long duracionMs, string estado, int registros, string? detalle);
     List<IntegracionAuditoriaDto> ListarAuditoria();

@@ -138,7 +138,8 @@ namespace ApiLinaAgbd.Security
 			path.StartsWithSegments("/api/v1/integracion", StringComparison.OrdinalIgnoreCase);
 
 		private static bool EsCatalogoIntegracion(PathString path) =>
-			path.StartsWithSegments("/api/v1/integracion", StringComparison.OrdinalIgnoreCase);
+			path.StartsWithSegments("/api/v1/integracion", StringComparison.OrdinalIgnoreCase) ||
+			path.StartsWithSegments("/api/v1/clientes", StringComparison.OrdinalIgnoreCase);
 
 		private static bool EsWebhookIntegracion(PathString path) =>
 			path.StartsWithSegments("/api/v1/webhooks/cliente-externo", StringComparison.OrdinalIgnoreCase);

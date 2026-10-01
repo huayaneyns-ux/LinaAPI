@@ -151,6 +151,7 @@ public class IntegracionClientesService : IIntegracionClientesService
 		documento = usuario.dni,
 		telefono = usuario.telefono,
 		email = usuario.correo,
+		origen = "lina",
 	};
 
 	private static string ConstruirUrl(string dominio, string ruta)

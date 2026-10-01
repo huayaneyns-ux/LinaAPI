@@ -67,7 +67,10 @@ public sealed class IntegracionService
             var catalogo = tipo.Equals("CLIENTES", StringComparison.OrdinalIgnoreCase)
                 ? new IntegracionRespuestaCatalogoDto { Clientes = System.Text.Json.JsonSerializer.Deserialize<List<ClienteIntegracionDto>>(body, options) ?? new() }
                 : System.Text.Json.JsonSerializer.Deserialize<IntegracionRespuestaCatalogoDto>(body, options) ?? new();
-            var importacion = _repository.GuardarConsultaExterna(empresaId, catalogo.Productos, catalogo.Proveedores, catalogo.Clientes);
+            var clientesExternos = catalogo.Clientes
+                .Where(cliente => !string.Equals(cliente.origen, "lina", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var importacion = _repository.GuardarConsultaExterna(empresaId, catalogo.Productos, catalogo.Proveedores, clientesExternos);
             var result = new IntegracionConsultaExternaDto
             {
                 Tipo = tipo.ToUpperInvariant(),
@@ -118,6 +121,23 @@ public sealed class IntegracionService
         catch (Exception ex)
         {
             _repository.FinalizarAuditoria(id, DateTime.UtcNow, (long)(DateTime.UtcNow - inicio).TotalMilliseconds, "ERROR", 0, ex.Message[..Math.Min(ex.Message.Length, 1000)]);
+            throw;
+        }
+    }
+
+    public List<ClienteIntegracionDto> Clientes(string apiKey, string? ip)
+    {
+        var inicio = DateTime.UtcNow;
+        var auditoriaId = _repository.IniciarAuditoria(apiKey, "CONSULTA_CATALOGO_CLIENTES", inicio, ip);
+        try
+        {
+            var clientes = _repository.ObtenerClientesExpuestos(apiKey, auditoriaId);
+            _repository.FinalizarAuditoria(auditoriaId, DateTime.UtcNow, (long)(DateTime.UtcNow - inicio).TotalMilliseconds, "EXITOSO", clientes.Count, null);
+            return clientes;
+        }
+        catch (Exception ex)
+        {
+            _repository.FinalizarAuditoria(auditoriaId, DateTime.UtcNow, (long)(DateTime.UtcNow - inicio).TotalMilliseconds, "ERROR", 0, ex.Message[..Math.Min(ex.Message.Length, 1000)]);
             throw;
         }
     }

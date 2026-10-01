@@ -113,7 +113,7 @@ public sealed class IntegracionRepository : IIntegracionRepository
             FROM dbo.IntegracionEmpresaProducto ep INNER JOIN dbo.Producto p ON p.id=ep.ProductoId
             LEFT JOIN dbo.Categoria c ON c.id=p.id_categoria LEFT JOIN dbo.Proveedor pr ON pr.id=p.id_proveedor
             WHERE ep.IntegracionEmpresaId=@EmpresaId AND p.estado=1
-              AND (p.id_integracion_sistema IS NULL OR p.id_integracion_sistema <> @EmpresaId)
+              AND p.id_integracion_sistema IS NULL
               AND NOT EXISTS (SELECT 1 FROM dbo.IntegracionCatalogoEntrega ce WHERE ce.IntegracionEmpresaId=ep.IntegracionEmpresaId AND ce.TipoRegistro='P' AND ce.RegistroId=p.id AND ce.ConfirmadoEn IS NOT NULL)", con, tx))
         {
             cmd.Parameters.AddWithValue("@EmpresaId", empresaId);
@@ -122,7 +122,7 @@ public sealed class IntegracionRepository : IIntegracionRepository
         }
         if (!string.Equals(tipo, "PRODUCTOS", StringComparison.OrdinalIgnoreCase))
         using (var cmd = new SqlCommand(@"SELECT DISTINCT pr.id,pr.ruc,pr.razon_social,pr.nombre_contacto,pr.telefono FROM dbo.IntegracionEmpresaProveedor ep INNER JOIN dbo.Proveedor pr ON pr.id=ep.ProveedorId WHERE ep.IntegracionEmpresaId=@EmpresaId AND pr.estado=1
-            AND (pr.id_integracion_sistema IS NULL OR pr.id_integracion_sistema <> @EmpresaId)
+            AND pr.id_integracion_sistema IS NULL
             AND NOT EXISTS (SELECT 1 FROM dbo.IntegracionCatalogoEntrega ce WHERE ce.IntegracionEmpresaId=ep.IntegracionEmpresaId AND ce.TipoRegistro='V' AND ce.RegistroId=pr.id AND ce.ConfirmadoEn IS NOT NULL)", con, tx))
         {
             cmd.Parameters.AddWithValue("@EmpresaId", empresaId);
@@ -142,6 +142,33 @@ public sealed class IntegracionRepository : IIntegracionRepository
         }
         tx.Commit();
         return (productos, proveedores);
+    }
+
+    public List<ClienteIntegracionDto> ObtenerClientesExpuestos(string apiKey, long auditoriaId)
+    {
+        using var con = _conexion.ObtenerConexion(); con.Open();
+        using var cmd = new SqlCommand(@"SELECT u.id, u.nombre_apellido, COALESCE(d.numero, '') AS documento,
+                COALESCE(u.telefono, '') AS telefono, COALESCE(u.correo, '') AS correo
+            FROM dbo.usuario u
+            LEFT JOIN dbo.documento d ON d.id=u.id_documento
+            INNER JOIN dbo.rol r ON r.id=u.id_rol
+            INNER JOIN dbo.IntegracionEmpresa e ON e.ApiKey=@ApiKey AND e.Estado=1
+            WHERE u.estado=1 AND r.estado=1 AND UPPER(r.nombre)='CLIENTE'
+              AND (u.id_integracion_sistema IS NULL OR u.id_integracion_sistema<>e.Id)
+            ORDER BY u.nombre_apellido", con);
+        cmd.Parameters.AddWithValue("@ApiKey", apiKey);
+        using var dr = cmd.ExecuteReader();
+        var clientes = new List<ClienteIntegracionDto>();
+        while (dr.Read()) clientes.Add(new ClienteIntegracionDto
+        {
+            id = Convert.ToInt32(dr["id"]),
+            nombre = Convert.ToString(dr["nombre_apellido"]) ?? string.Empty,
+            documento = Convert.ToString(dr["documento"]) ?? string.Empty,
+            telefono = Convert.ToString(dr["telefono"]) ?? string.Empty,
+            email = Convert.ToString(dr["correo"]) ?? string.Empty,
+            origen = "lina"
+        });
+        return clientes;
     }
 
     public int ConfirmarCatalogo(string apiKey, IntegracionCatalogoConfirmacionDto dto)
@@ -289,7 +316,7 @@ public sealed class IntegracionRepository : IIntegracionRepository
             FROM dbo.Producto p LEFT JOIN dbo.IntegracionEmpresa e ON e.Id=p.id_integracion_sistema
             LEFT JOIN dbo.IntegracionEmpresaProducto ep ON ep.ProductoId=p.id AND ep.IntegracionEmpresaId=@EmpresaId
             LEFT JOIN dbo.IntegracionCatalogoEntrega ce ON ce.RegistroId=p.id AND ce.TipoRegistro='P' AND ce.IntegracionEmpresaId=@EmpresaId AND ce.ConfirmadoEn IS NOT NULL
-            WHERE p.estado=1 AND (p.id_integracion_sistema IS NULL OR p.id_integracion_sistema <> @EmpresaId) ORDER BY p.nombre", con))
+            WHERE p.estado=1 AND p.id_integracion_sistema IS NULL ORDER BY p.nombre", con))
         { cmd.Parameters.AddWithValue("@EmpresaId", empresaId); using var dr=cmd.ExecuteReader(); while(dr.Read()) result.Productos.Add(new IntegracionProductoAdminDto { Id=Convert.ToInt32(dr["id"]), Codigo=NullableString(dr["codigo"]), Sku=NullableString(dr["sku"]), Nombre=NullableString(dr["nombre"]), EmpresaOrigen=NullableString(dr["NombreEmpresa"]), Seleccionado=Convert.ToBoolean(dr["Seleccionado"]), Entregado=Convert.ToBoolean(dr["Entregado"]) }); }
         using (var cmd = new SqlCommand(@"SELECT p.id,p.ruc,p.razon_social,e.NombreEmpresa,
             CASE WHEN ep.ProveedorId IS NULL THEN 0 ELSE 1 END Seleccionado,
@@ -297,7 +324,7 @@ public sealed class IntegracionRepository : IIntegracionRepository
             FROM dbo.Proveedor p LEFT JOIN dbo.IntegracionEmpresa e ON e.Id=p.id_integracion_sistema
             LEFT JOIN dbo.IntegracionEmpresaProveedor ep ON ep.ProveedorId=p.id AND ep.IntegracionEmpresaId=@EmpresaId
             LEFT JOIN dbo.IntegracionCatalogoEntrega ce ON ce.RegistroId=p.id AND ce.TipoRegistro='V' AND ce.IntegracionEmpresaId=@EmpresaId AND ce.ConfirmadoEn IS NOT NULL
-            WHERE p.estado=1 AND (p.id_integracion_sistema IS NULL OR p.id_integracion_sistema <> @EmpresaId) ORDER BY p.razon_social", con))
+            WHERE p.estado=1 AND p.id_integracion_sistema IS NULL ORDER BY p.razon_social", con))
         { cmd.Parameters.AddWithValue("@EmpresaId", empresaId); using var dr=cmd.ExecuteReader(); while(dr.Read()) result.Proveedores.Add(new IntegracionProveedorAdminDto { Id=Convert.ToInt32(dr["id"]), Ruc=NullableString(dr["ruc"]), RazonSocial=NullableString(dr["razon_social"]), EmpresaOrigen=NullableString(dr["NombreEmpresa"]), Seleccionado=Convert.ToBoolean(dr["Seleccionado"]), Entregado=Convert.ToBoolean(dr["Entregado"]) }); }
         return result;
     }
