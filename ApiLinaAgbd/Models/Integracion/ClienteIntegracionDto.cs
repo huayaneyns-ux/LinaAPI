@@ -7,6 +7,7 @@ public class ClienteIntegracionDto
 	public string documento { get; set; } = string.Empty;
 	public string telefono { get; set; } = string.Empty;
 	public string email { get; set; } = string.Empty;
+	public string origen { get; set; } = "lina";
 }
 
 public class ClienteWebhookDto

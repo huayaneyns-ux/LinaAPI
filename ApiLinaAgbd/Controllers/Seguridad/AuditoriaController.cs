@@ -15,8 +15,13 @@ public sealed class AuditoriaController : ControllerBase
 	}
 
 	[HttpGet("Lista")]
-	public IActionResult Listar()
+	public IActionResult Listar(
+		[FromQuery] int page = 1,
+		[FromQuery] int pageSize = 10,
+		[FromQuery] string? search = null,
+		[FromQuery] string? sortBy = null,
+		[FromQuery] string? sortDirection = null)
 	{
-		return Ok(_auditoriaRepository.Listar());
+		return Ok(_auditoriaRepository.Listar(page, pageSize, search, sortBy, sortDirection));
 	}
 }

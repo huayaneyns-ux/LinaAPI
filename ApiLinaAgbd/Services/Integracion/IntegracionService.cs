@@ -46,13 +46,16 @@ public sealed class IntegracionService
         var operacion = tipo.Equals("PROVEEDORES", StringComparison.OrdinalIgnoreCase)
             ? "CONSULTA_EXTERNA_PROVEEDORES" : "CONSULTA_EXTERNA_PRODUCTOS";
         var inicio = DateTime.UtcNow;
-        var auditoriaId = _repository.IniciarAuditoria(empresa.ApiKey, operacion, inicio, ip);
+        var auditoriaId = _repository.IniciarAuditoria(empresa.ApiKey, operacion, inicio, ip, "Lina", empresa.NombreEmpresa);
         try
         {
             var client = _httpClientFactory.CreateClient("IntegracionExterna");
-            var ruta = tipo.Equals("PROVEEDORES", StringComparison.OrdinalIgnoreCase)
-                ? "/api/v1/integracion/proveedores"
-                : "/api/v1/integracion/productos";
+            var ruta = tipo.ToUpperInvariant() switch
+            {
+                "PROVEEDORES" => "/api/v1/proveedores",
+                "CLIENTES" => "/api/v1/clientes",
+                _ => "/api/v1/productos"
+            };
             using var request = new HttpRequestMessage(HttpMethod.Get, ConstruirUrl(empresa.DominioEndpoint, ruta));
             request.Headers.Add("X-API-Key", empresa.ApiKeyExterna);
             using var response = await client.SendAsync(request);
@@ -60,16 +63,27 @@ public sealed class IntegracionService
             if (!response.IsSuccessStatusCode)
                 throw new InvalidOperationException($"La empresa externa respondió {(int)response.StatusCode}: {body[..Math.Min(body.Length, 400)]}");
 
-            var catalogo = System.Text.Json.JsonSerializer.Deserialize<IntegracionRespuestaCatalogoDto>(body,
-                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+            var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var catalogo = tipo.Equals("CLIENTES", StringComparison.OrdinalIgnoreCase)
+                ? new IntegracionRespuestaCatalogoDto { Clientes = System.Text.Json.JsonSerializer.Deserialize<List<ClienteIntegracionDto>>(body, options) ?? new() }
+                : System.Text.Json.JsonSerializer.Deserialize<IntegracionRespuestaCatalogoDto>(body, options) ?? new();
+            var clientesExternos = catalogo.Clientes
+                .Where(cliente => !string.Equals(cliente.origen, "lina", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var importacion = _repository.GuardarConsultaExterna(empresaId, catalogo.Productos, catalogo.Proveedores, clientesExternos);
             var result = new IntegracionConsultaExternaDto
             {
                 Tipo = tipo.ToUpperInvariant(),
                 Productos = tipo.Equals("PROVEEDORES", StringComparison.OrdinalIgnoreCase) ? new() : catalogo.Productos,
-                Proveedores = tipo.Equals("PROVEEDORES", StringComparison.OrdinalIgnoreCase) ? catalogo.Proveedores : new()
+                Proveedores = tipo.Equals("PROVEEDORES", StringComparison.OrdinalIgnoreCase) ? catalogo.Proveedores : new(),
+                Clientes = catalogo.Clientes,
+                Guardados = importacion.Total,
+                Insertados = importacion.Insertados,
+                Actualizados = importacion.Actualizados,
+                SinCambios = importacion.SinCambios
             };
             _repository.FinalizarAuditoria(auditoriaId, DateTime.UtcNow, (long)(DateTime.UtcNow - inicio).TotalMilliseconds,
-                "EXITOSO", result.Productos.Count + result.Proveedores.Count, null);
+                "EXITOSO", importacion.Total, null);
             return result;
         }
         catch (Exception ex)
@@ -84,13 +98,14 @@ public sealed class IntegracionService
     {
         public List<IntegracionProductoDto> Productos { get; set; } = new();
         public List<IntegracionProveedorDto> Proveedores { get; set; } = new();
+        public List<ClienteIntegracionDto> Clientes { get; set; } = new();
     }
 
     private static string ConstruirUrl(string dominio, string ruta)
     {
         var baseUrl = dominio.TrimEnd('/');
         if (baseUrl.EndsWith(ruta, StringComparison.OrdinalIgnoreCase)) return baseUrl;
-        return baseUrl + ruta;
+        return baseUrl + (baseUrl.EndsWith("/api/v1", StringComparison.OrdinalIgnoreCase) ? ruta.Replace("/api/v1", "", StringComparison.OrdinalIgnoreCase) : ruta);
     }
     public (long Id, List<IntegracionProductoDto> Productos, List<IntegracionProveedorDto> Proveedores, DateTime Inicio) Catalogo(string apiKey, string? ip, string? tipo = null)
     {
@@ -106,6 +121,23 @@ public sealed class IntegracionService
         catch (Exception ex)
         {
             _repository.FinalizarAuditoria(id, DateTime.UtcNow, (long)(DateTime.UtcNow - inicio).TotalMilliseconds, "ERROR", 0, ex.Message[..Math.Min(ex.Message.Length, 1000)]);
+            throw;
+        }
+    }
+
+    public List<ClienteIntegracionDto> Clientes(string apiKey, string? ip)
+    {
+        var inicio = DateTime.UtcNow;
+        var auditoriaId = _repository.IniciarAuditoria(apiKey, "CONSULTA_CATALOGO_CLIENTES", inicio, ip);
+        try
+        {
+            var clientes = _repository.ObtenerClientesExpuestos(apiKey, auditoriaId);
+            _repository.FinalizarAuditoria(auditoriaId, DateTime.UtcNow, (long)(DateTime.UtcNow - inicio).TotalMilliseconds, "EXITOSO", clientes.Count, null);
+            return clientes;
+        }
+        catch (Exception ex)
+        {
+            _repository.FinalizarAuditoria(auditoriaId, DateTime.UtcNow, (long)(DateTime.UtcNow - inicio).TotalMilliseconds, "ERROR", 0, ex.Message[..Math.Min(ex.Message.Length, 1000)]);
             throw;
         }
     }

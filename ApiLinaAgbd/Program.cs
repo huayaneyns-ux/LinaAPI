@@ -94,7 +94,8 @@ builder.Services.AddHttpClient("IntegracionClientes", client =>
 });
 builder.Services.AddHttpClient("IntegracionExterna", client =>
 {
-    client.Timeout = TimeSpan.FromSeconds(30);
+    // Render puede tardar en despertar el servicio después de un periodo sin tráfico.
+    client.Timeout = TimeSpan.FromSeconds(120);
 });
 
 builder.Services.Configure<FacturacionSettings>(

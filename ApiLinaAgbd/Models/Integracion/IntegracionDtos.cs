@@ -10,6 +10,8 @@ public sealed class IntegracionProductoDto
     public decimal PrecioVenta { get; set; }
     public decimal Stock { get; set; }
     public string? Categoria { get; set; }
+    public string? Marca { get; set; }
+    public string? Unidad { get; set; }
 }
 
 public sealed class IntegracionProveedorDto
@@ -53,6 +55,19 @@ public sealed class IntegracionConsultaExternaDto
     public string Tipo { get; set; } = string.Empty;
     public List<IntegracionProductoDto> Productos { get; set; } = new();
     public List<IntegracionProveedorDto> Proveedores { get; set; } = new();
+    public List<ClienteIntegracionDto> Clientes { get; set; } = new();
+    public int Guardados { get; set; }
+    public int Insertados { get; set; }
+    public int Actualizados { get; set; }
+    public int SinCambios { get; set; }
+}
+
+public sealed class IntegracionImportacionResultadoDto
+{
+    public int Total { get; set; }
+    public int Insertados { get; set; }
+    public int Actualizados { get; set; }
+    public int SinCambios { get; set; }
 }
 
 public sealed class IntegracionAuditoriaDto
@@ -60,6 +75,8 @@ public sealed class IntegracionAuditoriaDto
     public long Id { get; set; }
     public int? IntegracionEmpresaId { get; set; }
     public string Empresa { get; set; } = string.Empty;
+    public string EmpresaOrigen { get; set; } = string.Empty;
+    public string EmpresaDestino { get; set; } = string.Empty;
     public string Operacion { get; set; } = string.Empty;
     public DateTime FechaInicio { get; set; }
     public DateTime? FechaFin { get; set; }

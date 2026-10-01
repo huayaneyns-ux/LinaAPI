@@ -18,13 +18,23 @@ public class ClientesIntegracionController : ControllerBase
 	}
 
 	[HttpGet("clientes")]
-	public IActionResult ListarClientes() => Ok(_service.ListarClientes());
+	public IActionResult ListarClientes()
+	{
+		var apiKey = Request.Headers["X-API-Key"].ToString();
+		if (string.IsNullOrWhiteSpace(apiKey)) apiKey = Request.Headers["X-Integration-Key"].ToString();
+		try { return Ok(_integracionService.Clientes(apiKey, HttpContext.Connection.RemoteIpAddress?.ToString())); }
+		catch (UnauthorizedAccessException ex) { return Unauthorized(new { detail = ex.Message }); }
+	}
+
+	[HttpGet("integracion/clientes")]
+	public IActionResult ListarClientesIntegracion() => ListarClientes();
 
 	[HttpPost("webhooks/cliente-externo")]
 	public IActionResult RegistrarClienteExterno([FromBody] ClienteWebhookDto cliente)
 	{
 		var inicio = DateTime.UtcNow;
-		var integrationKey = Request.Headers["X-Integration-Key"].ToString();
+		var integrationKey = Request.Headers["X-API-Key"].ToString();
+		if (string.IsNullOrWhiteSpace(integrationKey)) integrationKey = Request.Headers["X-Integration-Key"].ToString();
 		long auditoriaId;
 		try
 		{

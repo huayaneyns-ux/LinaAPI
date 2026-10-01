@@ -112,7 +112,7 @@ public class IntegracionClientesService : IIntegracionClientesService
 			try
 			{
 				auditoriaId = _integracionRepository.IniciarAuditoria(
-					empresa.ApiKey, "WEBHOOK_CLIENTE_NUEVO", inicio, null);
+					empresa.ApiKey, "WEBHOOK_CLIENTE_NUEVO", inicio, null, "Lina", empresa.NombreEmpresa);
 				using var request = new HttpRequestMessage(HttpMethod.Post,
 					ConstruirUrl(empresa.DominioEndpoint, "/api/v1/webhooks/cliente-externo"));
 				request.Headers.Add("X-API-Key", empresa.ApiKeyExterna);
@@ -151,6 +151,7 @@ public class IntegracionClientesService : IIntegracionClientesService
 		documento = usuario.dni,
 		telefono = usuario.telefono,
 		email = usuario.correo,
+		origen = "lina",
 	};
 
 	private static string ConstruirUrl(string dominio, string ruta)

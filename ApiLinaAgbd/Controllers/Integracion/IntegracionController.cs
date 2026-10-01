@@ -66,12 +66,12 @@ public sealed class IntegracionController : ControllerBase
     [HttpPost("empresas/{empresaId}/consultar/{tipo}")]
     public async Task<IActionResult> ConsultarEmpresaExterna(int empresaId, string tipo)
     {
-        if (!tipo.Equals("PRODUCTOS", StringComparison.OrdinalIgnoreCase) &&
-            !tipo.Equals("PROVEEDORES", StringComparison.OrdinalIgnoreCase))
-            return BadRequest(new { detail = "El tipo debe ser PRODUCTOS o PROVEEDORES." });
+        if (!new[] { "PRODUCTOS", "PROVEEDORES", "CLIENTES" }.Contains(tipo.ToUpperInvariant()))
+			return BadRequest(new { detail = "El tipo debe ser PRODUCTOS, PROVEEDORES o CLIENTES." });
         try { return Ok(await _service.ConsultarEmpresaExternaAsync(empresaId, tipo, HttpContext.Connection.RemoteIpAddress?.ToString())); }
         catch (KeyNotFoundException ex) { return NotFound(new { detail = ex.Message }); }
         catch (InvalidOperationException ex) { return UnprocessableEntity(new { detail = ex.Message }); }
+        catch (TaskCanceledException) { return StatusCode(StatusCodes.Status504GatewayTimeout, new { detail = "La empresa externa tardó demasiado en responder. Intenta nuevamente en unos segundos." }); }
         catch (HttpRequestException ex) { return StatusCode(StatusCodes.Status502BadGateway, new { detail = ex.Message }); }
     }
 
@@ -88,7 +88,8 @@ public sealed class CatalogoIntegracionController : ControllerBase
     [HttpGet("productos-proveedores")]
     public IActionResult Catalogo()
     {
-        var apiKey = Request.Headers["X-Integration-Key"].ToString();
+        var apiKey = Request.Headers["X-API-Key"].ToString();
+        if (string.IsNullOrWhiteSpace(apiKey)) apiKey = Request.Headers["X-Integration-Key"].ToString();
         try
         {
             var result = _service.Catalogo(apiKey, HttpContext.Connection.RemoteIpAddress?.ToString());
@@ -100,7 +101,8 @@ public sealed class CatalogoIntegracionController : ControllerBase
     [HttpGet("productos")]
     public IActionResult Productos()
     {
-        var apiKey = Request.Headers["X-Integration-Key"].ToString();
+        var apiKey = Request.Headers["X-API-Key"].ToString();
+        if (string.IsNullOrWhiteSpace(apiKey)) apiKey = Request.Headers["X-Integration-Key"].ToString();
         try
         {
             var result = _service.Catalogo(apiKey, HttpContext.Connection.RemoteIpAddress?.ToString(), "PRODUCTOS");
@@ -112,7 +114,8 @@ public sealed class CatalogoIntegracionController : ControllerBase
     [HttpGet("proveedores")]
     public IActionResult Proveedores()
     {
-        var apiKey = Request.Headers["X-Integration-Key"].ToString();
+        var apiKey = Request.Headers["X-API-Key"].ToString();
+        if (string.IsNullOrWhiteSpace(apiKey)) apiKey = Request.Headers["X-Integration-Key"].ToString();
         try
         {
             var result = _service.Catalogo(apiKey, HttpContext.Connection.RemoteIpAddress?.ToString(), "PROVEEDORES");
@@ -124,7 +127,8 @@ public sealed class CatalogoIntegracionController : ControllerBase
     [HttpPost("catalogo/confirmacion")]
     public IActionResult ConfirmarCatalogo([FromBody] IntegracionCatalogoConfirmacionDto dto)
     {
-        var apiKey = Request.Headers["X-Integration-Key"].ToString();
+        var apiKey = Request.Headers["X-API-Key"].ToString();
+        if (string.IsNullOrWhiteSpace(apiKey)) apiKey = Request.Headers["X-Integration-Key"].ToString();
         try { return Ok(new { confirmado = _service.ConfirmarCatalogo(apiKey, dto, HttpContext.Connection.RemoteIpAddress?.ToString()) }); }
         catch (UnauthorizedAccessException ex) { return Unauthorized(new { detail = ex.Message }); }
     }
