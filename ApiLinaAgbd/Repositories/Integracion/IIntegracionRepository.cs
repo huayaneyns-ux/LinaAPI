@@ -16,5 +16,5 @@ public interface IIntegracionRepository
     void GuardarSeleccionCatalogo(int empresaId, IntegracionCatalogoSeleccionGuardarDto dto);
     int ConfirmarCatalogo(string apiKey, IntegracionCatalogoConfirmacionDto dto);
     void EliminarConfiguracion(int id);
-    int GuardarConsultaExterna(int empresaId, List<IntegracionProductoDto> productos, List<IntegracionProveedorDto> proveedores, List<ClienteIntegracionDto> clientes);
+    IntegracionImportacionResultadoDto GuardarConsultaExterna(int empresaId, List<IntegracionProductoDto> productos, List<IntegracionProveedorDto> proveedores, List<ClienteIntegracionDto> clientes);
 }

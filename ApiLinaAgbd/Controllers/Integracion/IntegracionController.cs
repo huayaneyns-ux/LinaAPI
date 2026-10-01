@@ -71,6 +71,7 @@ public sealed class IntegracionController : ControllerBase
         try { return Ok(await _service.ConsultarEmpresaExternaAsync(empresaId, tipo, HttpContext.Connection.RemoteIpAddress?.ToString())); }
         catch (KeyNotFoundException ex) { return NotFound(new { detail = ex.Message }); }
         catch (InvalidOperationException ex) { return UnprocessableEntity(new { detail = ex.Message }); }
+        catch (TaskCanceledException) { return StatusCode(StatusCodes.Status504GatewayTimeout, new { detail = "La empresa externa tardó demasiado en responder. Intenta nuevamente en unos segundos." }); }
         catch (HttpRequestException ex) { return StatusCode(StatusCodes.Status502BadGateway, new { detail = ex.Message }); }
     }
 

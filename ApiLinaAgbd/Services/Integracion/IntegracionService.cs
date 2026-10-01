@@ -67,17 +67,20 @@ public sealed class IntegracionService
             var catalogo = tipo.Equals("CLIENTES", StringComparison.OrdinalIgnoreCase)
                 ? new IntegracionRespuestaCatalogoDto { Clientes = System.Text.Json.JsonSerializer.Deserialize<List<ClienteIntegracionDto>>(body, options) ?? new() }
                 : System.Text.Json.JsonSerializer.Deserialize<IntegracionRespuestaCatalogoDto>(body, options) ?? new();
-            var guardados = _repository.GuardarConsultaExterna(empresaId, catalogo.Productos, catalogo.Proveedores, catalogo.Clientes);
+            var importacion = _repository.GuardarConsultaExterna(empresaId, catalogo.Productos, catalogo.Proveedores, catalogo.Clientes);
             var result = new IntegracionConsultaExternaDto
             {
                 Tipo = tipo.ToUpperInvariant(),
                 Productos = tipo.Equals("PROVEEDORES", StringComparison.OrdinalIgnoreCase) ? new() : catalogo.Productos,
                 Proveedores = tipo.Equals("PROVEEDORES", StringComparison.OrdinalIgnoreCase) ? catalogo.Proveedores : new(),
                 Clientes = catalogo.Clientes,
-                Guardados = guardados
+                Guardados = importacion.Total,
+                Insertados = importacion.Insertados,
+                Actualizados = importacion.Actualizados,
+                SinCambios = importacion.SinCambios
             };
             _repository.FinalizarAuditoria(auditoriaId, DateTime.UtcNow, (long)(DateTime.UtcNow - inicio).TotalMilliseconds,
-                "EXITOSO", result.Productos.Count + result.Proveedores.Count, null);
+                "EXITOSO", importacion.Total, null);
             return result;
         }
         catch (Exception ex)

@@ -180,10 +180,10 @@ public sealed class IntegracionRepository : IIntegracionRepository
             throw new KeyNotFoundException("La empresa de integración no existe.");
     }
 
-    public int GuardarConsultaExterna(int empresaId, List<IntegracionProductoDto> productos, List<IntegracionProveedorDto> proveedores, List<ClienteIntegracionDto> clientes)
+    public IntegracionImportacionResultadoDto GuardarConsultaExterna(int empresaId, List<IntegracionProductoDto> productos, List<IntegracionProveedorDto> proveedores, List<ClienteIntegracionDto> clientes)
     {
         using var con = _conexion.ObtenerConexion(); con.Open(); using var tx = con.BeginTransaction();
-        var guardados = 0;
+        var resultado = new IntegracionImportacionResultadoDto();
         var proveedorIds = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var proveedor in proveedores)
@@ -191,13 +191,13 @@ public sealed class IntegracionRepository : IIntegracionRepository
             var razon = (proveedor.RazonSocial ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(razon)) continue;
             var ruc = string.IsNullOrWhiteSpace(proveedor.Ruc) ? $"EXT-{empresaId}-{proveedor.Id}" : proveedor.Ruc.Trim();
-            var id = UpsertProveedor(con, tx, empresaId, ruc, razon, proveedor.NombreContacto, proveedor.Telefono);
-            proveedorIds[razon] = id; guardados++;
+            var upsert = UpsertProveedor(con, tx, empresaId, ruc, razon, proveedor.NombreContacto, proveedor.Telefono);
+            proveedorIds[razon] = upsert.Id; RegistrarEstado(resultado, upsert.Estado);
         }
 
         var proveedorGenerico = proveedores.FirstOrDefault()?.RazonSocial?.Trim();
         var proveedorGenericoId = proveedorGenerico is null
-            ? UpsertProveedor(con, tx, empresaId, $"EXT-{empresaId}-GEN", $"Proveedor externo - empresa {empresaId}", null, null)
+            ? UpsertProveedor(con, tx, empresaId, $"EXT-{empresaId}-GEN", $"Proveedor externo - empresa {empresaId}", null, null).Id
             : proveedorIds[proveedorGenerico];
         foreach (var producto in productos)
         {
@@ -210,17 +210,18 @@ public sealed class IntegracionRepository : IIntegracionRepository
             var sku = (producto.Sku ?? $"EXT-{empresaId}-{producto.Id}").Trim();
             if (sku.Length > 50) sku = sku[..50];
             using var cmd = new SqlCommand(@"IF EXISTS (SELECT 1 FROM dbo.Producto WHERE codigo=@Codigo)
-                UPDATE dbo.Producto SET nombre=@Nombre, descripcion=@Descripcion, sku=@Sku, precio_venta=@Precio,
-                    stockActual=@Stock, id_categoria=@Categoria, id_proveedor=@Proveedor, id_marca=@Marca,
-                    id_unidad_medida=@Unidad, id_integracion_sistema=@Empresa, estado=1 WHERE codigo=@Codigo
-                ELSE INSERT dbo.Producto(nombre,descripcion,sku,precio_venta,factor_conversion,stock_minimo,estado,id_categoria,id_proveedor,id_marca,id_unidad_medida,codigo,stockActual,id_integracion_sistema)
-                    VALUES(@Nombre,@Descripcion,@Sku,@Precio,1,0,1,@Categoria,@Proveedor,@Marca,@Unidad,@Codigo,@Stock,@Empresa)", con, tx);
+                BEGIN
+                  IF EXISTS (SELECT 1 FROM dbo.Producto WHERE codigo=@Codigo AND (nombre<>@Nombre OR ISNULL(descripcion,'')<>ISNULL(@Descripcion,'') OR sku<>@Sku OR precio_venta<>@Precio OR stockActual<>@Stock OR id_categoria<>@Categoria OR id_proveedor<>@Proveedor OR id_marca<>@Marca OR id_unidad_medida<>@Unidad OR estado<>1 OR ISNULL(id_integracion_sistema,0)<>@Empresa))
+                  BEGIN UPDATE dbo.Producto SET nombre=@Nombre, descripcion=@Descripcion, sku=@Sku, precio_venta=@Precio, stockActual=@Stock, id_categoria=@Categoria, id_proveedor=@Proveedor, id_marca=@Marca, id_unidad_medida=@Unidad, id_integracion_sistema=@Empresa, estado=1 WHERE codigo=@Codigo; SELECT 2; END
+                  ELSE SELECT 0;
+                END
+                ELSE BEGIN INSERT dbo.Producto(nombre,descripcion,sku,precio_venta,factor_conversion,stock_minimo,estado,id_categoria,id_proveedor,id_marca,id_unidad_medida,codigo,stockActual,id_integracion_sistema) VALUES(@Nombre,@Descripcion,@Sku,@Precio,1,0,1,@Categoria,@Proveedor,@Marca,@Unidad,@Codigo,@Stock,@Empresa); SELECT 1; END", con, tx);
             cmd.Parameters.AddWithValue("@Codigo", codigo); cmd.Parameters.AddWithValue("@Nombre", nombre);
             cmd.Parameters.AddWithValue("@Descripcion", (object?)producto.Descripcion ?? DBNull.Value); cmd.Parameters.AddWithValue("@Sku", sku);
             cmd.Parameters.AddWithValue("@Precio", producto.PrecioVenta); cmd.Parameters.AddWithValue("@Stock", producto.Stock);
             cmd.Parameters.AddWithValue("@Categoria", categoriaId); cmd.Parameters.AddWithValue("@Proveedor", proveedorGenericoId);
             cmd.Parameters.AddWithValue("@Marca", marcaId); cmd.Parameters.AddWithValue("@Unidad", unidadId); cmd.Parameters.AddWithValue("@Empresa", empresaId);
-            cmd.ExecuteNonQuery(); guardados++;
+            RegistrarEstado(resultado, Convert.ToInt32(cmd.ExecuteScalar()));
         }
 
         foreach (var cliente in clientes)
@@ -236,22 +237,31 @@ public sealed class IntegracionRepository : IIntegracionRepository
                 IF @Rol IS NULL THROW 50041, 'No existe el rol CLIENTE.', 1;
                 SELECT @IdDocumento=id FROM dbo.documento WHERE numero=@Documento;
                 IF @IdDocumento IS NULL BEGIN INSERT dbo.documento(tipo_documento,numero,nombre) VALUES(CASE WHEN LEN(@Documento)=11 THEN 'RUC' ELSE 'DNI' END,@Documento,@Nombre); SET @IdDocumento=SCOPE_IDENTITY(); END;
-                IF @IdUsuario IS NULL INSERT dbo.usuario(nombre_apellido,telefono,correo,contrasena,estado,id_rol,id_documento,id_integracion_sistema) VALUES(@Nombre,@Telefono,@Correo,CONVERT(VARCHAR(36),NEWID()),1,@Rol,@IdDocumento,@Empresa);
-                ELSE UPDATE dbo.usuario SET nombre_apellido=@Nombre,telefono=@Telefono,correo=@Correo,estado=1,id_rol=@Rol,id_documento=@IdDocumento,id_integracion_sistema=@Empresa WHERE id=@IdUsuario;", con, tx);
+                IF @IdUsuario IS NULL BEGIN INSERT dbo.usuario(nombre_apellido,telefono,correo,contrasena,estado,id_rol,id_documento,id_integracion_sistema) VALUES(@Nombre,@Telefono,@Correo,CONVERT(VARCHAR(36),NEWID()),1,@Rol,@IdDocumento,@Empresa); SELECT 1; END
+                ELSE IF EXISTS (SELECT 1 FROM dbo.usuario WHERE id=@IdUsuario AND (ISNULL(nombre_apellido,'')<>@Nombre OR ISNULL(telefono,'')<>ISNULL(@Telefono,'') OR ISNULL(correo,'')<>@Correo OR estado<>1 OR id_rol<>@Rol OR ISNULL(id_documento,0)<>@IdDocumento OR ISNULL(id_integracion_sistema,0)<>@Empresa))
+                BEGIN UPDATE dbo.usuario SET nombre_apellido=@Nombre,telefono=@Telefono,correo=@Correo,estado=1,id_rol=@Rol,id_documento=@IdDocumento,id_integracion_sistema=@Empresa WHERE id=@IdUsuario; SELECT 2; END
+                ELSE SELECT 0;", con, tx);
             cmd.Parameters.AddWithValue("@Documento", documento); cmd.Parameters.AddWithValue("@Nombre", nombre);
             cmd.Parameters.AddWithValue("@Telefono", (object?)cliente.telefono ?? DBNull.Value); cmd.Parameters.AddWithValue("@Correo", correo);
-            cmd.Parameters.AddWithValue("@Empresa", empresaId); cmd.ExecuteNonQuery(); guardados++;
+            cmd.Parameters.AddWithValue("@Empresa", empresaId); RegistrarEstado(resultado, Convert.ToInt32(cmd.ExecuteScalar()));
         }
-        tx.Commit(); return guardados;
+        tx.Commit(); resultado.Total = resultado.Insertados + resultado.Actualizados + resultado.SinCambios; return resultado;
     }
 
-    private static int UpsertProveedor(SqlConnection con, SqlTransaction tx, int empresaId, string ruc, string razon, string? contacto, string? telefono)
+    private static void RegistrarEstado(IntegracionImportacionResultadoDto resultado, int estado)
+    {
+        if (estado == 1) resultado.Insertados++;
+        else if (estado == 2) resultado.Actualizados++;
+        else resultado.SinCambios++;
+    }
+
+    private static (int Id, int Estado) UpsertProveedor(SqlConnection con, SqlTransaction tx, int empresaId, string ruc, string razon, string? contacto, string? telefono)
     {
         using var cmd = new SqlCommand(@"DECLARE @Id INT; SELECT TOP 1 @Id=id FROM dbo.Proveedor WHERE LOWER(razon_social)=LOWER(@Razon) OR ruc=@Ruc;
-            IF @Id IS NULL BEGIN INSERT dbo.Proveedor(ruc,razon_social,nombre_contacto,telefono,estado,id_integracion_sistema) VALUES(@Ruc,@Razon,@Contacto,@Telefono,1,@Empresa); SET @Id=SCOPE_IDENTITY(); END
-            ELSE UPDATE dbo.Proveedor SET razon_social=@Razon,nombre_contacto=@Contacto,telefono=@Telefono,estado=1,id_integracion_sistema=@Empresa WHERE id=@Id; SELECT @Id;", con, tx);
+            IF @Id IS NULL BEGIN INSERT dbo.Proveedor(ruc,razon_social,nombre_contacto,telefono,estado,id_integracion_sistema) VALUES(@Ruc,@Razon,@Contacto,@Telefono,1,@Empresa); SET @Id=SCOPE_IDENTITY(); SELECT CONCAT(@Id,':1'); END
+            ELSE IF EXISTS (SELECT 1 FROM dbo.Proveedor WHERE id=@Id AND (ruc<>@Ruc OR razon_social<>@Razon OR ISNULL(nombre_contacto,'')<>ISNULL(@Contacto,'') OR ISNULL(telefono,'')<>ISNULL(@Telefono,'') OR estado<>1 OR ISNULL(id_integracion_sistema,0)<>@Empresa)) BEGIN UPDATE dbo.Proveedor SET ruc=@Ruc,razon_social=@Razon,nombre_contacto=@Contacto,telefono=@Telefono,estado=1,id_integracion_sistema=@Empresa WHERE id=@Id; SELECT CONCAT(@Id,':2'); END ELSE SELECT CONCAT(@Id,':0');", con, tx);
         cmd.Parameters.AddWithValue("@Ruc", ruc); cmd.Parameters.AddWithValue("@Razon", razon); cmd.Parameters.AddWithValue("@Contacto", (object?)contacto ?? DBNull.Value); cmd.Parameters.AddWithValue("@Telefono", (object?)telefono ?? DBNull.Value); cmd.Parameters.AddWithValue("@Empresa", empresaId);
-        return Convert.ToInt32(cmd.ExecuteScalar());
+        var parts = Convert.ToString(cmd.ExecuteScalar())!.Split(':'); return (Convert.ToInt32(parts[0]), Convert.ToInt32(parts[1]));
     }
 
     private static int UpsertNombre(SqlConnection con, SqlTransaction tx, string tabla, string? nombre, string fallback)

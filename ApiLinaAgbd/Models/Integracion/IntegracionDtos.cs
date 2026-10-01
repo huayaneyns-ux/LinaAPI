@@ -57,6 +57,17 @@ public sealed class IntegracionConsultaExternaDto
     public List<IntegracionProveedorDto> Proveedores { get; set; } = new();
     public List<ClienteIntegracionDto> Clientes { get; set; } = new();
     public int Guardados { get; set; }
+    public int Insertados { get; set; }
+    public int Actualizados { get; set; }
+    public int SinCambios { get; set; }
+}
+
+public sealed class IntegracionImportacionResultadoDto
+{
+    public int Total { get; set; }
+    public int Insertados { get; set; }
+    public int Actualizados { get; set; }
+    public int SinCambios { get; set; }
 }
 
 public sealed class IntegracionAuditoriaDto
