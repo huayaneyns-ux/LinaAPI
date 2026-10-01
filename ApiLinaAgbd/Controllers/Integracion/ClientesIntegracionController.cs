@@ -9,8 +9,13 @@ namespace ApiLinaAgbd.Controllers.Integracion;
 public class ClientesIntegracionController : ControllerBase
 {
 	private readonly IIntegracionClientesService _service;
+	private readonly IntegracionService _integracionService;
 
-	public ClientesIntegracionController(IIntegracionClientesService service) => _service = service;
+	public ClientesIntegracionController(IIntegracionClientesService service, IntegracionService integracionService)
+	{
+		_service = service;
+		_integracionService = integracionService;
+	}
 
 	[HttpGet("clientes")]
 	public IActionResult ListarClientes() => Ok(_service.ListarClientes());
@@ -18,14 +23,38 @@ public class ClientesIntegracionController : ControllerBase
 	[HttpPost("webhooks/cliente-externo")]
 	public IActionResult RegistrarClienteExterno([FromBody] ClienteWebhookDto cliente)
 	{
-		if (string.IsNullOrWhiteSpace(cliente.nombre) || string.IsNullOrWhiteSpace(cliente.origen))
+		var inicio = DateTime.UtcNow;
+		var integrationKey = Request.Headers["X-Integration-Key"].ToString();
+		long auditoriaId;
+		try
 		{
-			return UnprocessableEntity(new { detail = "nombre y origen son obligatorios" });
+			auditoriaId = _integracionService.IniciarAuditoria(integrationKey, "WEBHOOK_CLIENTE_EXTERNO", inicio, HttpContext.Connection.RemoteIpAddress?.ToString());
+		}
+		catch (UnauthorizedAccessException ex)
+		{
+			return Unauthorized(new { detail = ex.Message });
 		}
 
-		var resultado = _service.RegistrarClienteExterno(cliente);
+		var camposFaltantes = new List<string>();
+		if (string.IsNullOrWhiteSpace(cliente.nombre)) camposFaltantes.Add("nombre");
+		if (string.IsNullOrWhiteSpace(cliente.documento)) camposFaltantes.Add("documento");
+		if (string.IsNullOrWhiteSpace(cliente.telefono)) camposFaltantes.Add("telefono");
+		if (string.IsNullOrWhiteSpace(cliente.email)) camposFaltantes.Add("email");
+
+		if (camposFaltantes.Count > 0)
+		{
+			_integracionService.FinalizarAuditoria(auditoriaId, DateTime.UtcNow, (long)(DateTime.UtcNow - inicio).TotalMilliseconds, "VALIDACION_ERROR", 0, string.Join(", ", camposFaltantes));
+			return UnprocessableEntity(new
+			{
+				code = "CAMPOS_OBLIGATORIOS",
+				detail = $"Los siguientes campos son obligatorios: {string.Join(", ", camposFaltantes)}."
+			});
+		}
+
+		var resultado = _service.RegistrarClienteExterno(cliente, integrationKey);
 		if (resultado.YaExistia)
 		{
+			_integracionService.FinalizarAuditoria(auditoriaId, DateTime.UtcNow, (long)(DateTime.UtcNow - inicio).TotalMilliseconds, "YA_EXISTIA", 0, resultado.CampoDuplicado);
 			var campo = resultado.CampoDuplicado == "correo" ? "correo electrónico" : "documento";
 			return Conflict(new
 			{
@@ -34,6 +63,7 @@ public class ClientesIntegracionController : ControllerBase
 			});
 		}
 
+		_integracionService.FinalizarAuditoria(auditoriaId, DateTime.UtcNow, (long)(DateTime.UtcNow - inicio).TotalMilliseconds, "EXITOSO", 1, null);
 		return StatusCode(StatusCodes.Status201Created, resultado.Cliente);
 	}
 }

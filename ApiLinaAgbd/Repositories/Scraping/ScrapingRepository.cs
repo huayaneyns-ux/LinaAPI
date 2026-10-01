@@ -157,7 +157,7 @@ public class ScrapingRepository : IScrapingRepository
                 deactivateCommand.ExecuteNonQuery();
             }
 
-            const string update = "UPDATE dbo.ProductMatch SET ProductoId = @ProductoId, Decision = @Decision, ReviewedBy = @ReviewedBy, ReviewedAt = SYSUTCDATETIME() WHERE Id = @Id AND IsActive = 1";
+            const string update = "UPDATE dbo.ProductMatch SET ProductoId = @ProductoId, Decision = @Decision, IsActive = CASE WHEN @Decision = 'NO_MATCH' THEN 0 ELSE IsActive END, ReviewedBy = @ReviewedBy, ReviewedAt = SYSUTCDATETIME() WHERE Id = @Id AND IsActive = 1";
             using var updateCommand = new SqlCommand(update, connection, transaction);
             updateCommand.Parameters.Add("@ProductoId", SqlDbType.Int).Value = (object?)decision.ProductoId ?? DBNull.Value;
             updateCommand.Parameters.Add("@Decision", SqlDbType.VarChar, 20).Value = decision.Decision;

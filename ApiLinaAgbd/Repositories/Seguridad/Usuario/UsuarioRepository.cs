@@ -34,10 +34,12 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 						u.id_rol,
 						COALESCE(r.nombre, '') AS rol,
 						u.estado,
-						u.origen
+						u.id_integracion_sistema,
+						e.NombreEmpresa AS empresa_origen
 					FROM dbo.usuario u
 					LEFT JOIN dbo.documento d ON d.id = u.id_documento
 					LEFT JOIN dbo.rol r ON r.id = u.id_rol
+					LEFT JOIN dbo.IntegracionEmpresa e ON e.Id = u.id_integracion_sistema
 					ORDER BY u.id DESC;";
 
 				using SqlCommand cmd = new(sql, con);
@@ -67,7 +69,8 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 						estado = Convert.ToBoolean(
 							dr["estado"]
 						),
-						origen = dr["origen"] == DBNull.Value ? null : dr["origen"].ToString()
+						idIntegracionSistema = dr["id_integracion_sistema"] == DBNull.Value ? null : Convert.ToInt32(dr["id_integracion_sistema"])
+						,empresaOrigen = dr["empresa_origen"] == DBNull.Value ? null : dr["empresa_origen"].ToString()
 					});
 				}
 			}
@@ -95,10 +98,12 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 						u.id_rol,
 						COALESCE(r.nombre, '') AS rol,
 						u.estado,
-						u.origen
+						u.id_integracion_sistema,
+						e.NombreEmpresa AS empresa_origen
 					FROM dbo.usuario u
 					LEFT JOIN dbo.documento d ON d.id = u.id_documento
 					LEFT JOIN dbo.rol r ON r.id = u.id_rol
+					LEFT JOIN dbo.IntegracionEmpresa e ON e.Id = u.id_integracion_sistema
 					WHERE u.id = @IdUsuario;";
 
 				using SqlCommand cmd = new(sql, con);
@@ -136,7 +141,8 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 						estado = Convert.ToBoolean(
 							dr["estado"]
 						),
-						origen = dr["origen"] == DBNull.Value ? null : dr["origen"].ToString()
+						idIntegracionSistema = dr["id_integracion_sistema"] == DBNull.Value ? null : Convert.ToInt32(dr["id_integracion_sistema"])
+						,empresaOrigen = dr["empresa_origen"] == DBNull.Value ? null : dr["empresa_origen"].ToString()
 					};
 				}
 			}
@@ -152,7 +158,7 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 			const string sql = @"
 				SELECT TOP 1 u.id, u.nombre_apellido, COALESCE(d.tipo_documento, 'DNI') AS tipo_documento, COALESCE(d.numero, '') AS dni,
 					COALESCE(u.sexo, '') AS sexo, u.telefono, COALESCE(u.correo, '') AS correo,
-					u.id_rol, COALESCE(r.nombre, '') AS rol, u.estado, u.origen
+					u.id_rol, COALESCE(r.nombre, '') AS rol, u.estado, u.id_integracion_sistema
 				FROM dbo.usuario u
 				INNER JOIN dbo.documento d ON d.id = u.id_documento
 				LEFT JOIN dbo.rol r ON r.id = u.id_rol
@@ -174,7 +180,7 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 				SELECT TOP 1 u.id, u.nombre_apellido, COALESCE(d.tipo_documento, 'DNI') AS tipo_documento,
 					COALESCE(d.numero, '') AS dni, COALESCE(u.sexo, '') AS sexo, u.telefono,
 					COALESCE(u.correo, '') AS correo, u.id_rol, COALESCE(r.nombre, '') AS rol,
-					u.estado, u.origen
+					u.estado, u.id_integracion_sistema
 				FROM dbo.usuario u
 				LEFT JOIN dbo.documento d ON d.id = u.id_documento
 				LEFT JOIN dbo.rol r ON r.id = u.id_rol
@@ -198,7 +204,7 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 			idRol = Convert.ToInt32(dr["id_rol"]),
 			rol = dr["rol"].ToString() ?? string.Empty,
 			estado = Convert.ToBoolean(dr["estado"]),
-			origen = dr["origen"] == DBNull.Value ? null : dr["origen"].ToString()
+			idIntegracionSistema = dr["id_integracion_sistema"] == DBNull.Value ? null : Convert.ToInt32(dr["id_integracion_sistema"])
 		};
 
 		public int Guardar(UsuarioInsertUpdateDto modelo)
@@ -224,9 +230,9 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 					IF @IdUsuario IS NULL
 					BEGIN
 						INSERT INTO dbo.usuario
-							(nombre_apellido, sexo, telefono, correo, contrasena, estado, id_rol, id_documento, origen)
+							(nombre_apellido, sexo, telefono, correo, contrasena, estado, id_rol, id_documento, id_integracion_sistema)
 						VALUES
-							(@NombreApellido, @Sexo, @Telefono, @Correo, @Contrasena, @Estado, @IdRol, @IdDocumento, @Origen);
+							(@NombreApellido, @Sexo, @Telefono, @Correo, @Contrasena, @Estado, @IdRol, @IdDocumento, @IdIntegracionSistema);
 						SET @IdUsuario = CONVERT(INT, SCOPE_IDENTITY());
 					END
 					ELSE
@@ -240,7 +246,7 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 							estado = @Estado,
 							id_rol = @IdRol,
 							id_documento = @IdDocumento,
-							origen = @Origen
+							id_integracion_sistema = @IdIntegracionSistema
 						WHERE id = @IdUsuario;
 					END
 
@@ -257,7 +263,7 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 				cmd.Parameters.AddWithValue("@Contrasena", modelo.contrasena);
 				cmd.Parameters.AddWithValue("@IdRol", modelo.idRol);
 				cmd.Parameters.AddWithValue("@Estado", modelo.estado);
-				cmd.Parameters.AddWithValue("@Origen", (object?)modelo.origen ?? DBNull.Value);
+				cmd.Parameters.AddWithValue("@IdIntegracionSistema", (object?)modelo.idIntegracionSistema ?? DBNull.Value);
 
 				SqlDataReader dr =
 					cmd.ExecuteReader();

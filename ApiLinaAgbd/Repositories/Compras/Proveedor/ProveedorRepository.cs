@@ -43,6 +43,7 @@ namespace ApiLinaAgbd.Repositories.Compras.Proveedor
 						Distrito = dr["distrito"].ToString(),
 						Provincia = dr["provincia"].ToString(),
 						Departamento = dr["departamento"].ToString()
+						,EmpresaOrigen = dr["empresa_origen"] == DBNull.Value ? null : dr["empresa_origen"].ToString()
 					});
 				}
 			}
@@ -80,6 +81,7 @@ namespace ApiLinaAgbd.Repositories.Compras.Proveedor
 						Distrito = dr["distrito"].ToString(),
 						Provincia = dr["provincia"].ToString(),
 						Departamento = dr["departamento"].ToString()
+						,EmpresaOrigen = dr["empresa_origen"] == DBNull.Value ? null : dr["empresa_origen"].ToString()
 					};
 				}
 			}

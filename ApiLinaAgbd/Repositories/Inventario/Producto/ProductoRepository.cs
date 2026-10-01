@@ -53,6 +53,7 @@ namespace ApiLinaAgbd.Repositories.Inventario.Producto
 						RazonSocial = dr["razon_social"].ToString(),
 						NombreContacto = dr["nombre_contacto"].ToString(),
 						Telefono = dr["telefono"].ToString(),
+						EmpresaOrigen = dr["empresa_origen"] == DBNull.Value ? null : dr["empresa_origen"].ToString(),
 
 						IdMarca = Convert.ToInt32(dr["id_marca"]),
 						Marca = dr["marca"].ToString(),

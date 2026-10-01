@@ -36,6 +36,33 @@ namespace ApiLinaAgbd.Security
 				return;
 			}
 
+			// La clave del catálogo se administra desde el módulo de Integración
+			// (tabla IntegracionEmpresa), por eso se valida en el servicio y no
+			// contra la clave global del .env.
+			if (EsCatalogoIntegracion(context.Request.Path))
+			{
+				if (!context.Request.Headers.TryGetValue("X-Integration-Key", out var empresaKey) || string.IsNullOrWhiteSpace(empresaKey.ToString()))
+				{
+					context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+					await context.Response.WriteAsJsonAsync(new { mensaje = "Falta el header X-Integration-Key con la clave generada para la empresa." });
+					return;
+				}
+				await _next(context);
+				return;
+			}
+
+			if (EsWebhookIntegracion(context.Request.Path))
+			{
+				if (!context.Request.Headers.TryGetValue("X-Integration-Key", out var webhookKey) || string.IsNullOrWhiteSpace(webhookKey.ToString()))
+				{
+					context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+					await context.Response.WriteAsJsonAsync(new { mensaje = "Falta el header X-Integration-Key con la clave generada para la empresa." });
+					return;
+				}
+				await _next(context);
+				return;
+			}
+
 			var esRutaIntegracion = EsRutaIntegracion(context.Request.Path);
 			var claveEsperada = esRutaIntegracion
 				? _configuration["INTEGRACION_API_KEY_LINA"]?.Trim() ?? string.Empty
@@ -102,6 +129,13 @@ namespace ApiLinaAgbd.Security
 
 		private static bool EsRutaIntegracion(PathString path) =>
 			path.StartsWithSegments("/api/v1/clientes", StringComparison.OrdinalIgnoreCase) ||
-			path.StartsWithSegments("/api/v1/webhooks", StringComparison.OrdinalIgnoreCase);
+			path.StartsWithSegments("/api/v1/webhooks", StringComparison.OrdinalIgnoreCase) ||
+			path.StartsWithSegments("/api/v1/integracion", StringComparison.OrdinalIgnoreCase);
+
+		private static bool EsCatalogoIntegracion(PathString path) =>
+			path.StartsWithSegments("/api/v1/integracion", StringComparison.OrdinalIgnoreCase);
+
+		private static bool EsWebhookIntegracion(PathString path) =>
+			path.StartsWithSegments("/api/v1/webhooks/cliente-externo", StringComparison.OrdinalIgnoreCase);
 	}
 }

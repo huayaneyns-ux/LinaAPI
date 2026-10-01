@@ -56,11 +56,6 @@ namespace ApiLinaAgbd.Services.Seguridad.Usuario
 				}
 			}
 
-			if (modelo.idRol == 1 && string.IsNullOrWhiteSpace(modelo.origen))
-			{
-				modelo.origen = "lina";
-			}
-
 			var id = _usuarioRepository.Guardar(modelo);
 			if (modelo.idUsuario is null && modelo.idRol == 1)
 			{
