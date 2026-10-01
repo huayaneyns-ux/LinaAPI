@@ -24,7 +24,8 @@ public class ClientesIntegracionController : ControllerBase
 	public IActionResult RegistrarClienteExterno([FromBody] ClienteWebhookDto cliente)
 	{
 		var inicio = DateTime.UtcNow;
-		var integrationKey = Request.Headers["X-Integration-Key"].ToString();
+		var integrationKey = Request.Headers["X-API-Key"].ToString();
+		if (string.IsNullOrWhiteSpace(integrationKey)) integrationKey = Request.Headers["X-Integration-Key"].ToString();
 		long auditoriaId;
 		try
 		{

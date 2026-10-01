@@ -4,5 +4,5 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Auditoria;
 
 public interface IAuditoriaRepository
 {
-	List<AuditoriaDto> Listar();
+	AuditoriaPageDto Listar(int page, int pageSize, string? search, string? sortBy, string? sortDirection);
 }

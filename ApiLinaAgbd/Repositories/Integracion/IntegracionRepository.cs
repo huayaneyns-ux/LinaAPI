@@ -180,6 +180,95 @@ public sealed class IntegracionRepository : IIntegracionRepository
             throw new KeyNotFoundException("La empresa de integración no existe.");
     }
 
+    public int GuardarConsultaExterna(int empresaId, List<IntegracionProductoDto> productos, List<IntegracionProveedorDto> proveedores, List<ClienteIntegracionDto> clientes)
+    {
+        using var con = _conexion.ObtenerConexion(); con.Open(); using var tx = con.BeginTransaction();
+        var guardados = 0;
+        var proveedorIds = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var proveedor in proveedores)
+        {
+            var razon = (proveedor.RazonSocial ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(razon)) continue;
+            var ruc = string.IsNullOrWhiteSpace(proveedor.Ruc) ? $"EXT-{empresaId}-{proveedor.Id}" : proveedor.Ruc.Trim();
+            var id = UpsertProveedor(con, tx, empresaId, ruc, razon, proveedor.NombreContacto, proveedor.Telefono);
+            proveedorIds[razon] = id; guardados++;
+        }
+
+        var proveedorGenerico = proveedores.FirstOrDefault()?.RazonSocial?.Trim();
+        var proveedorGenericoId = proveedorGenerico is null
+            ? UpsertProveedor(con, tx, empresaId, $"EXT-{empresaId}-GEN", $"Proveedor externo - empresa {empresaId}", null, null)
+            : proveedorIds[proveedorGenerico];
+        foreach (var producto in productos)
+        {
+            var codigo = (producto.Codigo ?? string.Empty).Trim();
+            var nombre = (producto.Nombre ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(codigo) || string.IsNullOrWhiteSpace(nombre)) continue;
+            var categoriaId = UpsertNombre(con, tx, "Categoria", producto.Categoria, "Sin categoría");
+            var marcaId = UpsertNombre(con, tx, "Marca", producto.Marca, "Sin marca");
+            var unidadId = UpsertUnidad(con, tx, producto.Unidad);
+            var sku = (producto.Sku ?? $"EXT-{empresaId}-{producto.Id}").Trim();
+            if (sku.Length > 50) sku = sku[..50];
+            using var cmd = new SqlCommand(@"IF EXISTS (SELECT 1 FROM dbo.Producto WHERE codigo=@Codigo)
+                UPDATE dbo.Producto SET nombre=@Nombre, descripcion=@Descripcion, sku=@Sku, precio_venta=@Precio,
+                    stockActual=@Stock, id_categoria=@Categoria, id_proveedor=@Proveedor, id_marca=@Marca,
+                    id_unidad_medida=@Unidad, id_integracion_sistema=@Empresa, estado=1 WHERE codigo=@Codigo
+                ELSE INSERT dbo.Producto(nombre,descripcion,sku,precio_venta,factor_conversion,stock_minimo,estado,id_categoria,id_proveedor,id_marca,id_unidad_medida,codigo,stockActual,id_integracion_sistema)
+                    VALUES(@Nombre,@Descripcion,@Sku,@Precio,1,0,1,@Categoria,@Proveedor,@Marca,@Unidad,@Codigo,@Stock,@Empresa)", con, tx);
+            cmd.Parameters.AddWithValue("@Codigo", codigo); cmd.Parameters.AddWithValue("@Nombre", nombre);
+            cmd.Parameters.AddWithValue("@Descripcion", (object?)producto.Descripcion ?? DBNull.Value); cmd.Parameters.AddWithValue("@Sku", sku);
+            cmd.Parameters.AddWithValue("@Precio", producto.PrecioVenta); cmd.Parameters.AddWithValue("@Stock", producto.Stock);
+            cmd.Parameters.AddWithValue("@Categoria", categoriaId); cmd.Parameters.AddWithValue("@Proveedor", proveedorGenericoId);
+            cmd.Parameters.AddWithValue("@Marca", marcaId); cmd.Parameters.AddWithValue("@Unidad", unidadId); cmd.Parameters.AddWithValue("@Empresa", empresaId);
+            cmd.ExecuteNonQuery(); guardados++;
+        }
+
+        foreach (var cliente in clientes)
+        {
+            var nombre = (cliente.nombre ?? string.Empty).Trim(); var correo = (cliente.email ?? string.Empty).Trim();
+            var documento = (cliente.documento ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(nombre)) continue;
+            if (string.IsNullOrWhiteSpace(documento)) documento = $"EXT-{empresaId}-{cliente.id ?? Guid.NewGuid().GetHashCode():X}";
+            using var cmd = new SqlCommand(@"DECLARE @IdDocumento INT, @IdUsuario INT, @Rol INT;
+                SELECT TOP 1 @IdUsuario=u.id FROM dbo.usuario u LEFT JOIN dbo.documento d ON d.id=u.id_documento
+                    WHERE (NULLIF(@Documento,'') IS NOT NULL AND d.numero=@Documento) OR (NULLIF(@Correo,'') IS NOT NULL AND LOWER(u.correo)=LOWER(@Correo));
+                SELECT TOP 1 @Rol=id FROM dbo.rol WHERE UPPER(nombre)='CLIENTE' AND estado=1;
+                IF @Rol IS NULL THROW 50041, 'No existe el rol CLIENTE.', 1;
+                SELECT @IdDocumento=id FROM dbo.documento WHERE numero=@Documento;
+                IF @IdDocumento IS NULL BEGIN INSERT dbo.documento(tipo_documento,numero,nombre) VALUES(CASE WHEN LEN(@Documento)=11 THEN 'RUC' ELSE 'DNI' END,@Documento,@Nombre); SET @IdDocumento=SCOPE_IDENTITY(); END;
+                IF @IdUsuario IS NULL INSERT dbo.usuario(nombre_apellido,telefono,correo,contrasena,estado,id_rol,id_documento,id_integracion_sistema) VALUES(@Nombre,@Telefono,@Correo,CONVERT(VARCHAR(36),NEWID()),1,@Rol,@IdDocumento,@Empresa);
+                ELSE UPDATE dbo.usuario SET nombre_apellido=@Nombre,telefono=@Telefono,correo=@Correo,estado=1,id_rol=@Rol,id_documento=@IdDocumento,id_integracion_sistema=@Empresa WHERE id=@IdUsuario;", con, tx);
+            cmd.Parameters.AddWithValue("@Documento", documento); cmd.Parameters.AddWithValue("@Nombre", nombre);
+            cmd.Parameters.AddWithValue("@Telefono", (object?)cliente.telefono ?? DBNull.Value); cmd.Parameters.AddWithValue("@Correo", correo);
+            cmd.Parameters.AddWithValue("@Empresa", empresaId); cmd.ExecuteNonQuery(); guardados++;
+        }
+        tx.Commit(); return guardados;
+    }
+
+    private static int UpsertProveedor(SqlConnection con, SqlTransaction tx, int empresaId, string ruc, string razon, string? contacto, string? telefono)
+    {
+        using var cmd = new SqlCommand(@"DECLARE @Id INT; SELECT TOP 1 @Id=id FROM dbo.Proveedor WHERE LOWER(razon_social)=LOWER(@Razon) OR ruc=@Ruc;
+            IF @Id IS NULL BEGIN INSERT dbo.Proveedor(ruc,razon_social,nombre_contacto,telefono,estado,id_integracion_sistema) VALUES(@Ruc,@Razon,@Contacto,@Telefono,1,@Empresa); SET @Id=SCOPE_IDENTITY(); END
+            ELSE UPDATE dbo.Proveedor SET razon_social=@Razon,nombre_contacto=@Contacto,telefono=@Telefono,estado=1,id_integracion_sistema=@Empresa WHERE id=@Id; SELECT @Id;", con, tx);
+        cmd.Parameters.AddWithValue("@Ruc", ruc); cmd.Parameters.AddWithValue("@Razon", razon); cmd.Parameters.AddWithValue("@Contacto", (object?)contacto ?? DBNull.Value); cmd.Parameters.AddWithValue("@Telefono", (object?)telefono ?? DBNull.Value); cmd.Parameters.AddWithValue("@Empresa", empresaId);
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    private static int UpsertNombre(SqlConnection con, SqlTransaction tx, string tabla, string? nombre, string fallback)
+    {
+        var value = string.IsNullOrWhiteSpace(nombre) ? fallback : nombre.Trim();
+        using var cmd = new SqlCommand($"DECLARE @Id INT; SELECT TOP 1 @Id=id FROM dbo.{tabla} WHERE LOWER(nombre)=LOWER(@Nombre); IF @Id IS NULL BEGIN INSERT dbo.{tabla}(nombre,estado) VALUES(@Nombre,1); SET @Id=SCOPE_IDENTITY(); END SELECT @Id;", con, tx);
+        cmd.Parameters.AddWithValue("@Nombre", value.Length > 50 ? value[..50] : value); return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    private static int UpsertUnidad(SqlConnection con, SqlTransaction tx, string? unidad)
+    {
+        var value = string.IsNullOrWhiteSpace(unidad) ? "unidad" : unidad.Trim();
+        var abrev = value.ToLowerInvariant() switch { "m2" or "metro cuadrado" => "MTK", "kg" or "kilogramo" or "kilogramos" => "KGM", "m" or "metro" or "metros" => "MTR", _ => "NIU" };
+        using var cmd = new SqlCommand(@"DECLARE @Id INT; SELECT TOP 1 @Id=id FROM dbo.UnidadMedida WHERE abreviatura=@Abrev OR LOWER(nombre)=LOWER(@Nombre); IF @Id IS NULL BEGIN INSERT dbo.UnidadMedida(nombre,abreviatura,estado) VALUES(@Nombre,@Abrev,1); SET @Id=SCOPE_IDENTITY(); END SELECT @Id;", con, tx);
+        cmd.Parameters.AddWithValue("@Nombre", value.Length > 50 ? value[..50] : value); cmd.Parameters.AddWithValue("@Abrev", abrev); return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
     public IntegracionCatalogoAdminDto ObtenerCatalogoAdmin(int empresaId)
     {
         using var con = _conexion.ObtenerConexion(); con.Open();

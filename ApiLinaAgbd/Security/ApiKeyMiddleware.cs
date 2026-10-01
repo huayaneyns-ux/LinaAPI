@@ -41,10 +41,13 @@ namespace ApiLinaAgbd.Security
 			// contra la clave global del .env.
 			if (EsCatalogoIntegracion(context.Request.Path))
 			{
-				if (!context.Request.Headers.TryGetValue("X-Integration-Key", out var empresaKey) || string.IsNullOrWhiteSpace(empresaKey.ToString()))
+				var empresaKey = context.Request.Headers[ApiKeyMiddleware.HeaderName].ToString();
+				if (string.IsNullOrWhiteSpace(empresaKey))
+					empresaKey = context.Request.Headers["X-Integration-Key"].ToString();
+				if (string.IsNullOrWhiteSpace(empresaKey))
 				{
 					context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-					await context.Response.WriteAsJsonAsync(new { mensaje = "Falta el header X-Integration-Key con la clave generada para la empresa." });
+					await context.Response.WriteAsJsonAsync(new { mensaje = "Falta el header X-API-Key con la clave de integración." });
 					return;
 				}
 				await _next(context);
@@ -53,7 +56,9 @@ namespace ApiLinaAgbd.Security
 
 			if (EsWebhookIntegracion(context.Request.Path))
 			{
-				if (!context.Request.Headers.TryGetValue("X-Integration-Key", out var webhookKey) || string.IsNullOrWhiteSpace(webhookKey.ToString()))
+				var webhookKey = context.Request.Headers[ApiKeyMiddleware.HeaderName].ToString();
+				if (string.IsNullOrWhiteSpace(webhookKey)) webhookKey = context.Request.Headers["X-Integration-Key"].ToString();
+				if (string.IsNullOrWhiteSpace(webhookKey))
 				{
 					context.Response.StatusCode = StatusCodes.Status401Unauthorized;
 					await context.Response.WriteAsJsonAsync(new { mensaje = "Falta el header X-Integration-Key con la clave generada para la empresa." });

@@ -10,6 +10,8 @@ public sealed class IntegracionProductoDto
     public decimal PrecioVenta { get; set; }
     public decimal Stock { get; set; }
     public string? Categoria { get; set; }
+    public string? Marca { get; set; }
+    public string? Unidad { get; set; }
 }
 
 public sealed class IntegracionProveedorDto
@@ -53,6 +55,8 @@ public sealed class IntegracionConsultaExternaDto
     public string Tipo { get; set; } = string.Empty;
     public List<IntegracionProductoDto> Productos { get; set; } = new();
     public List<IntegracionProveedorDto> Proveedores { get; set; } = new();
+    public List<ClienteIntegracionDto> Clientes { get; set; } = new();
+    public int Guardados { get; set; }
 }
 
 public sealed class IntegracionAuditoriaDto
