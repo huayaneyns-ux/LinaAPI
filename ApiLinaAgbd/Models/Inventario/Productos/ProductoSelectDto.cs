@@ -28,6 +28,7 @@
 		public string RazonSocial { get; set; }
 		public string NombreContacto { get; set; }
 		public string Telefono { get; set; }
+		public string? EmpresaOrigen { get; set; }
 
 		// Marca
 		public int IdMarca { get; set; }

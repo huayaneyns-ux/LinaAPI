@@ -92,6 +92,10 @@ builder.Services.AddHttpClient("IntegracionClientes", client =>
 {
 	client.Timeout = TimeSpan.FromSeconds(5);
 });
+builder.Services.AddHttpClient("IntegracionExterna", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
 
 builder.Services.Configure<FacturacionSettings>(
 	builder.Configuration.GetSection(FacturacionSettings.SectionName));

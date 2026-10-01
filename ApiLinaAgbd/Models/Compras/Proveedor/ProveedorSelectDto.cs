@@ -23,5 +23,6 @@ namespace ApiLinaAgbd.Models.Compras.Proveedor
 		public string? Provincia { get; set; }
 
 		public string? Departamento { get; set; }
+		public string? EmpresaOrigen { get; set; }
 	}
 }

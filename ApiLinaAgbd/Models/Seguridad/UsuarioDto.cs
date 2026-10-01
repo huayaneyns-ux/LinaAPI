@@ -36,6 +36,7 @@
 		public bool estado { get; set; }
 
 		public int? idIntegracionSistema { get; set; }
+		public string? empresaOrigen { get; set; }
 
 	}
 

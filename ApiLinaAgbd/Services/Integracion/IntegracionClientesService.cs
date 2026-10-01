@@ -10,20 +10,17 @@ public class IntegracionClientesService : IIntegracionClientesService
 	private const int RolCliente = 1;
 	private readonly IUsuarioRepository _usuarioRepository;
 	private readonly IHttpClientFactory _httpClientFactory;
-	private readonly IConfiguration _configuration;
 	private readonly ILogger<IntegracionClientesService> _logger;
 	private readonly IIntegracionRepository _integracionRepository;
 
 	public IntegracionClientesService(
 		IUsuarioRepository usuarioRepository,
 		IHttpClientFactory httpClientFactory,
-		IConfiguration configuration,
 		ILogger<IntegracionClientesService> logger,
 		IIntegracionRepository integracionRepository)
 	{
 		_usuarioRepository = usuarioRepository;
 		_httpClientFactory = httpClientFactory;
-		_configuration = configuration;
 		_logger = logger;
 		_integracionRepository = integracionRepository;
 	}
@@ -85,12 +82,14 @@ public class IntegracionClientesService : IIntegracionClientesService
 
 	public async Task NotificarClienteNuevoAsync(ClienteIntegracionDto cliente)
 	{
-		var url = _configuration["INTEGRACION_URL_WEBHOOK_ACABADOS"]?.Trim();
-		var apiKey = _configuration["INTEGRACION_API_KEY_ACABADOS"]?.Trim();
-
-		if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(apiKey))
+		var empresas = _integracionRepository.ListarConfiguraciones()
+			.Where(empresa => empresa.Estado &&
+				!string.IsNullOrWhiteSpace(empresa.DominioEndpoint) &&
+				!string.IsNullOrWhiteSpace(empresa.ApiKeyExterna))
+			.ToList();
+		if (empresas.Count == 0)
 		{
-			_logger.LogWarning("Webhook de Acabados no configurado. Defina INTEGRACION_URL_WEBHOOK_ACABADOS e INTEGRACION_API_KEY_ACABADOS.");
+			_logger.LogWarning("No hay empresas externas configuradas para notificar el cliente {Documento}.", cliente.documento);
 			return;
 		}
 
@@ -102,24 +101,46 @@ public class IntegracionClientesService : IIntegracionClientesService
 			documento = cliente.documento,
 			telefono = cliente.telefono,
 			email = cliente.email,
+			direccion = (string?)null,
+			origen = "lina",
 		};
 
-		try
+		foreach (var empresa in empresas)
 		{
-			using var request = new HttpRequestMessage(HttpMethod.Post, url);
-			request.Headers.Add("X-API-Key", apiKey);
-			request.Content = JsonContent.Create(payload);
-
-			var client = _httpClientFactory.CreateClient("IntegracionClientes");
-			using var response = await client.SendAsync(request);
-			if (!response.IsSuccessStatusCode)
+			var inicio = DateTime.UtcNow;
+			long? auditoriaId = null;
+			try
 			{
-				_logger.LogWarning("Acabados respondió {StatusCode} al registrar el cliente {Documento}.", response.StatusCode, cliente.documento);
+				auditoriaId = _integracionRepository.IniciarAuditoria(
+					empresa.ApiKey, "WEBHOOK_CLIENTE_NUEVO", inicio, null);
+				using var request = new HttpRequestMessage(HttpMethod.Post,
+					ConstruirUrl(empresa.DominioEndpoint, "/api/v1/webhooks/cliente-externo"));
+				request.Headers.Add("X-API-Key", empresa.ApiKeyExterna);
+				request.Content = JsonContent.Create(payload);
+
+				var client = _httpClientFactory.CreateClient("IntegracionClientes");
+				using var response = await client.SendAsync(request);
+				var responseBody = await response.Content.ReadAsStringAsync();
+				if (!response.IsSuccessStatusCode)
+				{
+					_integracionRepository.FinalizarAuditoria(auditoriaId.Value, DateTime.UtcNow,
+						(long)(DateTime.UtcNow - inicio).TotalMilliseconds, "ERROR", 0,
+						$"HTTP {(int)response.StatusCode}: {responseBody[..Math.Min(responseBody.Length, 900)]}");
+					_logger.LogWarning("{Empresa} respondió {StatusCode} al registrar el cliente {Documento}. Respuesta: {Respuesta}", empresa.NombreEmpresa, response.StatusCode, cliente.documento, responseBody);
+					continue;
+				}
+
+				_integracionRepository.FinalizarAuditoria(auditoriaId.Value, DateTime.UtcNow,
+					(long)(DateTime.UtcNow - inicio).TotalMilliseconds, "EXITOSO", 1, null);
 			}
-		}
-		catch (Exception exception)
-		{
-			_logger.LogError(exception, "No se pudo notificar el cliente {Documento} a Acabados.", cliente.documento);
+			catch (Exception exception)
+			{
+				if (auditoriaId.HasValue)
+					_integracionRepository.FinalizarAuditoria(auditoriaId.Value, DateTime.UtcNow,
+						(long)(DateTime.UtcNow - inicio).TotalMilliseconds, "ERROR", 0,
+						exception.Message[..Math.Min(exception.Message.Length, 1000)]);
+				_logger.LogError(exception, "No se pudo notificar el cliente {Documento} a {Empresa}.", cliente.documento, empresa.NombreEmpresa);
+			}
 		}
 	}
 
@@ -131,4 +152,11 @@ public class IntegracionClientesService : IIntegracionClientesService
 		telefono = usuario.telefono,
 		email = usuario.correo,
 	};
+
+	private static string ConstruirUrl(string dominio, string ruta)
+	{
+		var baseUrl = dominio.TrimEnd('/');
+		if (baseUrl.EndsWith(ruta, StringComparison.OrdinalIgnoreCase)) return baseUrl;
+		return baseUrl + ruta;
+	}
 }

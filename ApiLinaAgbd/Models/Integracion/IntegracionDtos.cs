@@ -9,10 +9,7 @@ public sealed class IntegracionProductoDto
     public string? Descripcion { get; set; }
     public decimal PrecioVenta { get; set; }
     public decimal Stock { get; set; }
-    public int? IdIntegracionSistema { get; set; }
     public string? Categoria { get; set; }
-    public string? Ruc { get; set; }
-    public string? RazonSocial { get; set; }
 }
 
 public sealed class IntegracionProveedorDto
@@ -24,6 +21,12 @@ public sealed class IntegracionProveedorDto
     public string? Telefono { get; set; }
 }
 
+public sealed class IntegracionCatalogoConfirmacionDto
+{
+    public List<int> ProductoIds { get; set; } = new();
+    public List<int> ProveedorIds { get; set; } = new();
+}
+
 public sealed class IntegracionConfiguracionDto
 {
     public int Id { get; set; }
@@ -31,6 +34,8 @@ public sealed class IntegracionConfiguracionDto
     public string? Descripcion { get; set; }
     public string ApiKey { get; set; } = string.Empty;
     public bool Estado { get; set; }
+    public string? DominioEndpoint { get; set; }
+    public string? ApiKeyExterna { get; set; }
 }
 
 public sealed class IntegracionConfiguracionGuardarDto
@@ -39,6 +44,15 @@ public sealed class IntegracionConfiguracionGuardarDto
     public string? Descripcion { get; set; }
     public string? ApiKey { get; set; }
     public bool Estado { get; set; } = true;
+    public string? DominioEndpoint { get; set; }
+    public string? ApiKeyExterna { get; set; }
+}
+
+public sealed class IntegracionConsultaExternaDto
+{
+    public string Tipo { get; set; } = string.Empty;
+    public List<IntegracionProductoDto> Productos { get; set; } = new();
+    public List<IntegracionProveedorDto> Proveedores { get; set; } = new();
 }
 
 public sealed class IntegracionAuditoriaDto

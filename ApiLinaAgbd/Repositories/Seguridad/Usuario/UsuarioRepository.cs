@@ -34,10 +34,12 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 						u.id_rol,
 						COALESCE(r.nombre, '') AS rol,
 						u.estado,
-						u.id_integracion_sistema
+						u.id_integracion_sistema,
+						e.NombreEmpresa AS empresa_origen
 					FROM dbo.usuario u
 					LEFT JOIN dbo.documento d ON d.id = u.id_documento
 					LEFT JOIN dbo.rol r ON r.id = u.id_rol
+					LEFT JOIN dbo.IntegracionEmpresa e ON e.Id = u.id_integracion_sistema
 					ORDER BY u.id DESC;";
 
 				using SqlCommand cmd = new(sql, con);
@@ -68,6 +70,7 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 							dr["estado"]
 						),
 						idIntegracionSistema = dr["id_integracion_sistema"] == DBNull.Value ? null : Convert.ToInt32(dr["id_integracion_sistema"])
+						,empresaOrigen = dr["empresa_origen"] == DBNull.Value ? null : dr["empresa_origen"].ToString()
 					});
 				}
 			}
@@ -95,10 +98,12 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 						u.id_rol,
 						COALESCE(r.nombre, '') AS rol,
 						u.estado,
-						u.id_integracion_sistema
+						u.id_integracion_sistema,
+						e.NombreEmpresa AS empresa_origen
 					FROM dbo.usuario u
 					LEFT JOIN dbo.documento d ON d.id = u.id_documento
 					LEFT JOIN dbo.rol r ON r.id = u.id_rol
+					LEFT JOIN dbo.IntegracionEmpresa e ON e.Id = u.id_integracion_sistema
 					WHERE u.id = @IdUsuario;";
 
 				using SqlCommand cmd = new(sql, con);
@@ -137,6 +142,7 @@ namespace ApiLinaAgbd.Repositories.Seguridad.Usuario
 							dr["estado"]
 						),
 						idIntegracionSistema = dr["id_integracion_sistema"] == DBNull.Value ? null : Convert.ToInt32(dr["id_integracion_sistema"])
+						,empresaOrigen = dr["empresa_origen"] == DBNull.Value ? null : dr["empresa_origen"].ToString()
 					};
 				}
 			}
