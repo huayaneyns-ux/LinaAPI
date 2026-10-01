@@ -75,6 +75,8 @@ public sealed class IntegracionAuditoriaDto
     public long Id { get; set; }
     public int? IntegracionEmpresaId { get; set; }
     public string Empresa { get; set; } = string.Empty;
+    public string EmpresaOrigen { get; set; } = string.Empty;
+    public string EmpresaDestino { get; set; } = string.Empty;
     public string Operacion { get; set; } = string.Empty;
     public DateTime FechaInicio { get; set; }
     public DateTime? FechaFin { get; set; }

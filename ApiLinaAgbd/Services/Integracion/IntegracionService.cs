@@ -46,7 +46,7 @@ public sealed class IntegracionService
         var operacion = tipo.Equals("PROVEEDORES", StringComparison.OrdinalIgnoreCase)
             ? "CONSULTA_EXTERNA_PROVEEDORES" : "CONSULTA_EXTERNA_PRODUCTOS";
         var inicio = DateTime.UtcNow;
-        var auditoriaId = _repository.IniciarAuditoria(empresa.ApiKey, operacion, inicio, ip);
+        var auditoriaId = _repository.IniciarAuditoria(empresa.ApiKey, operacion, inicio, ip, "Lina", empresa.NombreEmpresa);
         try
         {
             var client = _httpClientFactory.CreateClient("IntegracionExterna");

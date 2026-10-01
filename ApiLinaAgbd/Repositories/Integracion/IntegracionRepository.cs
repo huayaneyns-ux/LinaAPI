@@ -238,7 +238,7 @@ public sealed class IntegracionRepository : IIntegracionRepository
             if (sku.Length > 50) sku = sku[..50];
             using var cmd = new SqlCommand(@"IF EXISTS (SELECT 1 FROM dbo.Producto WHERE codigo=@Codigo)
                 BEGIN
-                  IF EXISTS (SELECT 1 FROM dbo.Producto WHERE codigo=@Codigo AND (nombre<>@Nombre OR ISNULL(descripcion,'')<>ISNULL(@Descripcion,'') OR sku<>@Sku OR precio_venta<>@Precio OR stockActual<>@Stock OR id_categoria<>@Categoria OR id_proveedor<>@Proveedor OR id_marca<>@Marca OR id_unidad_medida<>@Unidad OR estado<>1 OR ISNULL(id_integracion_sistema,0)<>@Empresa))
+                  IF EXISTS (SELECT 1 FROM dbo.Producto WHERE codigo=@Codigo AND (LTRIM(RTRIM(ISNULL(nombre,'')))<>LTRIM(RTRIM(ISNULL(@Nombre,''))) OR LTRIM(RTRIM(ISNULL(descripcion,'')))<>LTRIM(RTRIM(ISNULL(@Descripcion,''))) OR LTRIM(RTRIM(ISNULL(sku,'')))<>LTRIM(RTRIM(ISNULL(@Sku,''))) OR precio_venta<>@Precio OR stockActual<>@Stock OR id_categoria<>@Categoria OR id_proveedor<>@Proveedor OR id_marca<>@Marca OR id_unidad_medida<>@Unidad OR estado<>1 OR ISNULL(id_integracion_sistema,0)<>@Empresa))
                   BEGIN UPDATE dbo.Producto SET nombre=@Nombre, descripcion=@Descripcion, sku=@Sku, precio_venta=@Precio, stockActual=@Stock, id_categoria=@Categoria, id_proveedor=@Proveedor, id_marca=@Marca, id_unidad_medida=@Unidad, id_integracion_sistema=@Empresa, estado=1 WHERE codigo=@Codigo; SELECT 2; END
                   ELSE SELECT 0;
                 END
@@ -256,7 +256,14 @@ public sealed class IntegracionRepository : IIntegracionRepository
             var nombre = (cliente.nombre ?? string.Empty).Trim(); var correo = (cliente.email ?? string.Empty).Trim();
             var documento = (cliente.documento ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(nombre)) continue;
-            if (string.IsNullOrWhiteSpace(documento)) documento = $"EXT-{empresaId}-{cliente.id ?? Guid.NewGuid().GetHashCode():X}";
+            if (string.IsNullOrWhiteSpace(documento))
+            {
+                // Debe ser estable entre sincronizaciones. Un Guid aleatorio
+                // hacía que el mismo cliente se marcara como actualizado siempre.
+                var identidad = string.IsNullOrWhiteSpace(correo) ? nombre : correo.ToLowerInvariant();
+                var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(identidad)))[..12];
+                documento = $"EXT-{empresaId}-{hash}";
+            }
             using var cmd = new SqlCommand(@"DECLARE @IdDocumento INT, @IdUsuario INT, @Rol INT;
                 SELECT TOP 1 @IdUsuario=u.id FROM dbo.usuario u LEFT JOIN dbo.documento d ON d.id=u.id_documento
                     WHERE (NULLIF(@Documento,'') IS NOT NULL AND d.numero=@Documento) OR (NULLIF(@Correo,'') IS NOT NULL AND LOWER(u.correo)=LOWER(@Correo));
@@ -265,7 +272,7 @@ public sealed class IntegracionRepository : IIntegracionRepository
                 SELECT @IdDocumento=id FROM dbo.documento WHERE numero=@Documento;
                 IF @IdDocumento IS NULL BEGIN INSERT dbo.documento(tipo_documento,numero,nombre) VALUES(CASE WHEN LEN(@Documento)=11 THEN 'RUC' ELSE 'DNI' END,@Documento,@Nombre); SET @IdDocumento=SCOPE_IDENTITY(); END;
                 IF @IdUsuario IS NULL BEGIN INSERT dbo.usuario(nombre_apellido,telefono,correo,contrasena,estado,id_rol,id_documento,id_integracion_sistema) VALUES(@Nombre,@Telefono,@Correo,CONVERT(VARCHAR(36),NEWID()),1,@Rol,@IdDocumento,@Empresa); SELECT 1; END
-                ELSE IF EXISTS (SELECT 1 FROM dbo.usuario WHERE id=@IdUsuario AND (ISNULL(nombre_apellido,'')<>@Nombre OR ISNULL(telefono,'')<>ISNULL(@Telefono,'') OR ISNULL(correo,'')<>@Correo OR estado<>1 OR id_rol<>@Rol OR ISNULL(id_documento,0)<>@IdDocumento OR ISNULL(id_integracion_sistema,0)<>@Empresa))
+                ELSE IF EXISTS (SELECT 1 FROM dbo.usuario WHERE id=@IdUsuario AND (LTRIM(RTRIM(ISNULL(nombre_apellido,'')))<>LTRIM(RTRIM(ISNULL(@Nombre,''))) OR LTRIM(RTRIM(ISNULL(telefono,'')))<>LTRIM(RTRIM(ISNULL(@Telefono,''))) OR LOWER(LTRIM(RTRIM(ISNULL(correo,''))))<>LOWER(LTRIM(RTRIM(ISNULL(@Correo,'')))) OR estado<>1 OR id_rol<>@Rol OR ISNULL(id_documento,0)<>@IdDocumento OR ISNULL(id_integracion_sistema,0)<>@Empresa))
                 BEGIN UPDATE dbo.usuario SET nombre_apellido=@Nombre,telefono=@Telefono,correo=@Correo,estado=1,id_rol=@Rol,id_documento=@IdDocumento,id_integracion_sistema=@Empresa WHERE id=@IdUsuario; SELECT 2; END
                 ELSE SELECT 0;", con, tx);
             cmd.Parameters.AddWithValue("@Documento", documento); cmd.Parameters.AddWithValue("@Nombre", nombre);
@@ -286,7 +293,7 @@ public sealed class IntegracionRepository : IIntegracionRepository
     {
         using var cmd = new SqlCommand(@"DECLARE @Id INT; SELECT TOP 1 @Id=id FROM dbo.Proveedor WHERE LOWER(razon_social)=LOWER(@Razon) OR ruc=@Ruc;
             IF @Id IS NULL BEGIN INSERT dbo.Proveedor(ruc,razon_social,nombre_contacto,telefono,estado,id_integracion_sistema) VALUES(@Ruc,@Razon,@Contacto,@Telefono,1,@Empresa); SET @Id=SCOPE_IDENTITY(); SELECT CONCAT(@Id,':1'); END
-            ELSE IF EXISTS (SELECT 1 FROM dbo.Proveedor WHERE id=@Id AND (ruc<>@Ruc OR razon_social<>@Razon OR ISNULL(nombre_contacto,'')<>ISNULL(@Contacto,'') OR ISNULL(telefono,'')<>ISNULL(@Telefono,'') OR estado<>1 OR ISNULL(id_integracion_sistema,0)<>@Empresa)) BEGIN UPDATE dbo.Proveedor SET ruc=@Ruc,razon_social=@Razon,nombre_contacto=@Contacto,telefono=@Telefono,estado=1,id_integracion_sistema=@Empresa WHERE id=@Id; SELECT CONCAT(@Id,':2'); END ELSE SELECT CONCAT(@Id,':0');", con, tx);
+            ELSE IF EXISTS (SELECT 1 FROM dbo.Proveedor WHERE id=@Id AND (LTRIM(RTRIM(ISNULL(ruc,'')))<>LTRIM(RTRIM(ISNULL(@Ruc,''))) OR LTRIM(RTRIM(ISNULL(razon_social,'')))<>LTRIM(RTRIM(ISNULL(@Razon,''))) OR LTRIM(RTRIM(ISNULL(nombre_contacto,'')))<>LTRIM(RTRIM(ISNULL(@Contacto,''))) OR LTRIM(RTRIM(ISNULL(telefono,'')))<>LTRIM(RTRIM(ISNULL(@Telefono,''))) OR estado<>1 OR ISNULL(id_integracion_sistema,0)<>@Empresa)) BEGIN UPDATE dbo.Proveedor SET ruc=@Ruc,razon_social=@Razon,nombre_contacto=@Contacto,telefono=@Telefono,estado=1,id_integracion_sistema=@Empresa WHERE id=@Id; SELECT CONCAT(@Id,':2'); END ELSE SELECT CONCAT(@Id,':0');", con, tx);
         cmd.Parameters.AddWithValue("@Ruc", ruc); cmd.Parameters.AddWithValue("@Razon", razon); cmd.Parameters.AddWithValue("@Contacto", (object?)contacto ?? DBNull.Value); cmd.Parameters.AddWithValue("@Telefono", (object?)telefono ?? DBNull.Value); cmd.Parameters.AddWithValue("@Empresa", empresaId);
         var parts = Convert.ToString(cmd.ExecuteScalar())!.Split(':'); return (Convert.ToInt32(parts[0]), Convert.ToInt32(parts[1]));
     }
@@ -342,11 +349,13 @@ public sealed class IntegracionRepository : IIntegracionRepository
         tx.Commit();
     }
 
-    public long IniciarAuditoria(string apiKey, string operacion, DateTime inicio, string? ip)
+    public long IniciarAuditoria(string apiKey, string operacion, DateTime inicio, string? ip, string? empresaOrigen = null, string? empresaDestino = null)
     {
         using var con = _conexion.ObtenerConexion(); con.Open();
-        using var cmd = new SqlCommand(@"INSERT dbo.IntegracionAuditoria (IntegracionEmpresaId,Operacion,FechaInicio,Estado,IpOrigen) OUTPUT INSERTED.Id SELECT Id,@Operacion,@Inicio,'EN_PROCESO',@Ip FROM dbo.IntegracionEmpresa WHERE ApiKey=@ApiKey AND Estado=1", con);
+        using var cmd = new SqlCommand(@"INSERT dbo.IntegracionAuditoria (IntegracionEmpresaId,Operacion,FechaInicio,Estado,IpOrigen,EmpresaOrigen,EmpresaDestino) OUTPUT INSERTED.Id SELECT Id,@Operacion,@Inicio,'EN_PROCESO',@Ip,@EmpresaOrigen,@EmpresaDestino FROM dbo.IntegracionEmpresa WHERE ApiKey=@ApiKey AND Estado=1", con);
         cmd.Parameters.AddWithValue("@ApiKey", apiKey); cmd.Parameters.AddWithValue("@Operacion", operacion); cmd.Parameters.AddWithValue("@Inicio", inicio); cmd.Parameters.AddWithValue("@Ip", (object?)ip ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@EmpresaOrigen", (object?)(empresaOrigen ?? "Empresa externa") ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@EmpresaDestino", (object?)(empresaDestino ?? "Lina") ?? DBNull.Value);
         var result = cmd.ExecuteScalar();
         if (result is null) throw new UnauthorizedAccessException("Clave de integración inválida o empresa inactiva.");
         return Convert.ToInt64(result);
@@ -362,9 +371,9 @@ public sealed class IntegracionRepository : IIntegracionRepository
     public List<IntegracionAuditoriaDto> ListarAuditoria()
     {
         using var con = _conexion.ObtenerConexion(); con.Open();
-        using var cmd = new SqlCommand("SELECT TOP 500 a.Id,a.IntegracionEmpresaId,COALESCE(e.NombreEmpresa, 'Empresa eliminada') AS Empresa,a.Operacion,a.FechaInicio,a.FechaFin,a.DuracionMs,a.Estado,a.RegistrosEnviados,a.Detalle,a.IpOrigen FROM dbo.IntegracionAuditoria a LEFT JOIN dbo.IntegracionEmpresa e ON e.Id=a.IntegracionEmpresaId ORDER BY a.FechaInicio DESC", con);
+        using var cmd = new SqlCommand("SELECT TOP 500 a.Id,a.IntegracionEmpresaId,COALESCE(e.NombreEmpresa, 'Empresa eliminada') AS Empresa,COALESCE(a.EmpresaOrigen,'Empresa externa') AS EmpresaOrigen,COALESCE(a.EmpresaDestino,'Lina') AS EmpresaDestino,a.Operacion,a.FechaInicio,a.FechaFin,a.DuracionMs,a.Estado,a.RegistrosEnviados,a.Detalle,a.IpOrigen FROM dbo.IntegracionAuditoria a LEFT JOIN dbo.IntegracionEmpresa e ON e.Id=a.IntegracionEmpresaId ORDER BY a.FechaInicio DESC", con);
         using var dr = cmd.ExecuteReader(); var result = new List<IntegracionAuditoriaDto>();
-        while (dr.Read()) result.Add(new IntegracionAuditoriaDto { Id=Convert.ToInt64(dr["Id"]), IntegracionEmpresaId=dr["IntegracionEmpresaId"] == DBNull.Value ? null : Convert.ToInt32(dr["IntegracionEmpresaId"]), Empresa=Convert.ToString(dr["Empresa"]) ?? "", Operacion=Convert.ToString(dr["Operacion"]) ?? "", FechaInicio=Convert.ToDateTime(dr["FechaInicio"]), FechaFin=dr["FechaFin"] == DBNull.Value ? null : Convert.ToDateTime(dr["FechaFin"]), DuracionMs=dr["DuracionMs"] == DBNull.Value ? null : Convert.ToInt64(dr["DuracionMs"]), Estado=Convert.ToString(dr["Estado"]) ?? "", RegistrosEnviados=Convert.ToInt32(dr["RegistrosEnviados"]), Detalle=NullableString(dr["Detalle"]), IpOrigen=NullableString(dr["IpOrigen"]) });
+        while (dr.Read()) result.Add(new IntegracionAuditoriaDto { Id=Convert.ToInt64(dr["Id"]), IntegracionEmpresaId=dr["IntegracionEmpresaId"] == DBNull.Value ? null : Convert.ToInt32(dr["IntegracionEmpresaId"]), Empresa=Convert.ToString(dr["Empresa"]) ?? "", EmpresaOrigen=Convert.ToString(dr["EmpresaOrigen"]) ?? "", EmpresaDestino=Convert.ToString(dr["EmpresaDestino"]) ?? "", Operacion=Convert.ToString(dr["Operacion"]) ?? "", FechaInicio=Convert.ToDateTime(dr["FechaInicio"]), FechaFin=dr["FechaFin"] == DBNull.Value ? null : Convert.ToDateTime(dr["FechaFin"]), DuracionMs=dr["DuracionMs"] == DBNull.Value ? null : Convert.ToInt64(dr["DuracionMs"]), Estado=Convert.ToString(dr["Estado"]) ?? "", RegistrosEnviados=Convert.ToInt32(dr["RegistrosEnviados"]), Detalle=NullableString(dr["Detalle"]), IpOrigen=NullableString(dr["IpOrigen"]) });
         return result;
     }
 
